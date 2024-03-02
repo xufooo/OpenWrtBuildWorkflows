@@ -37,4 +37,3 @@ echo 'src-git small https://github.com/kenzok8/small' >> feeds.conf.default
 #patch content
 #EOF
 #git apply example.patch
-
