@@ -51,8 +51,8 @@ env:
   # CUSTOM_SCRIPT_2 is the name of extra bash script you want to execute after feeds update&install.
   # You can modify the initial settings of your firmware through these two scripts. If this is what you need,
   # please upload your scripts to the root directory of your workflow repo.
-  CUSTOM_SCRIPT_1: zybo-custom-script-1.sh
-  CUSTOM_SCRIPT_2: zybo-custom-script-2.sh
+  CUSTOM_SCRIPT_1: zybo-immortalwrt-script-1.sh
+  CUSTOM_SCRIPT_2: zybo-immortalwrt-script-2.sh
   # STORE_PRODUCTS determine whether to upload all compilation products to workflow artifacts.
   # Not only firmwires, all compiled packages will be here, including compiled but not solidified into firmware.
   STORE_PRODUCTS: false
