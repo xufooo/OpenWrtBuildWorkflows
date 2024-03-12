@@ -21,7 +21,7 @@ on:
       force-build:
         description: "Build new firmware anyway"
         required: false
-        default: "false"
+        default: "true"
       ssh:
         description: "SSH connection to Actions"
         required: false
