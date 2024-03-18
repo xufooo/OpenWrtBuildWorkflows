@@ -24,3 +24,7 @@ patch -p1 < b87b4734c6e56fa45ec612350e2aa480ed2d8dd6.patch
 
 # luci-app-sfe
 cp -r wnr2000v4/luci-app-sfe package
+
+# m4 compile error patch
+cd tools/m4/patches
+wget https://raw.githubusercontent.com/keyfour/openwrt/2722d51c5cf6a296b8ecf7ae09e46690403a6c3d/tools/m4/patches/011-fix-sigstksz.patch
