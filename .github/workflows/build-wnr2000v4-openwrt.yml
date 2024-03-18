@@ -46,7 +46,7 @@ env:
                    uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev clang file nano aria2"
   # CONFIG_FILE is the name of your own config files for compiling, you should upload these files into the root 
   # directory of your workflow repo.
-  CONFIG_FILE: wnr2000v4.config
+  CONFIG_FILE: wnr2000v4-openwrt.config
   # CUSTOM_SCRIPT_1 is the name of extra bash script you want to execute before feeds update&install.
   # CUSTOM_SCRIPT_2 is the name of extra bash script you want to execute after feeds update&install.
   # You can modify the initial settings of your firmware through these two scripts. If this is what you need,
