@@ -149,7 +149,7 @@ jobs:
 
       - name: Load custom configuration
         run: |
-          [ -e files ] && mv files/ openwrt/files/
+          [ -e wnr2000v4 ] && mv wnr2000v4/ openwrt/wnr2000v4/
           [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
  
       - name: Run custom-script-2
