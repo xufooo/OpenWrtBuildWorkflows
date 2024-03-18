@@ -23,4 +23,4 @@ touch target/linux/generic/config-4.9
 patch -p1 < b87b4734c6e56fa45ec612350e2aa480ed2d8dd6.patch
 
 # luci-app-sfe
-cp -r ../wnr2000v4/luci-app-sfe package
+cp -r wnr2000v4/luci-app-sfe package
