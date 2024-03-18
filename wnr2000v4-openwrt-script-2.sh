@@ -31,3 +31,14 @@ mv 011-fix-sigstksz.patch tools/m4/patches
 # mklib compile error patch
 wget https://scm.linefinity.com/common/openwrt/commit/a1ee0ebbd8e9927a65c5d1e0db497dd118d559a6.patch
 patch -p1 < a1ee0ebbd8e9927a65c5d1e0db497dd118d559a6.patch
+
+# cmake compile error patch
+touch limits.patch
+cat>limits.patch<<EOF
+--- a/Source/cmStandardIncludes.h
++++ b/Source/cmStandardIncludes.h
+@@ -27,2 +27,3 @@
+ #include <vector>
++#include <limits>
+EOF
+mv limits.patch tools/cmake/patches
