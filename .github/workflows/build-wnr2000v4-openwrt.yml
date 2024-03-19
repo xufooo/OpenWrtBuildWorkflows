@@ -127,6 +127,7 @@ jobs:
           sudo timedatectl set-timezone $TIME_ZONE
           sudo mkdir -p /workdir/
           sudo chown $USER:$GROUPS /workdir/
+          sudo echo '46.101.214.210 git.lede-project.org' >> /etc/hosts
 
       - name: Clone source code
         working-directory: /workdir
