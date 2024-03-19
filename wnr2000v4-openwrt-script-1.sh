@@ -36,3 +36,4 @@
 #EOF
 #git apply example.patch
 
+sed -i 's/lede-project/openwrt/g' feeds.conf.default
