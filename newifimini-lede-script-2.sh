@@ -17,3 +17,4 @@
 #patch content
 #EOF
 #git apply example.patch
+sed -i 's#GO_PKG_TARGET_VARS.*# #g' feeds/packages/utils/v2dat/Makefile
