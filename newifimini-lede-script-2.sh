@@ -17,4 +17,4 @@
 #patch content
 #EOF
 #git apply example.patch
-sed -i '/PKG_BUILD_DIR/a\PKG_BUILD_FLAGS:=no-mips16' feeds/packages/utils/v2dat/Makefile
+sed -i '/PKG_BUILD_DIR/a\PKG_USE_MIPS16:=0' feeds/packages/utils/v2dat/Makefile
