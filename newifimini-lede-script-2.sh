@@ -18,4 +18,4 @@
 #EOF
 #git apply example.patch
 # fix v2dat build error
-#sed -i '/PKG_BUILD_DIR/a\PKG_USE_MIPS16:=0' feeds/packages/utils/v2dat/Makefile
+sed -i '/PKG_BUILD_DIR/a\PKG_USE_MIPS16:=0' feeds/packages/utils/v2dat/Makefile
