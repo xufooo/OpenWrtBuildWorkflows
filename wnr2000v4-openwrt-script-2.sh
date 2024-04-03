@@ -25,14 +25,6 @@ patch -p1 < b87b4734c6e56fa45ec612350e2aa480ed2d8dd6.patch
 # luci-app-sfe
 cp -r wnr2000v4/luci-app-sfe package
 
-# fullcone nat
-git clone -b master --single-branch https://github.com/LGA1150/openwrt-fullconenat package/fullconenat
-mkdir -p package/network/config/firewall/patches
-wget -O package/network/config/firewall/patches/fullconenat.patch https://raw.githubusercontent.com/LGA1150/fullconenat-fw3-patch/e66be7fbac970f5b05aff6ddf1499e717534c1af/fullconenat.patch
-wget -O- https://raw.githubusercontent.com/LGA1150/fullconenat-fw3-patch/e66be7fbac970f5b05aff6ddf1499e717534c1af/Makefile.patch | patch -p1
-pushd feeds/luci
-wget -O- https://raw.githubusercontent.com/LGA1150/fullconenat-fw3-patch/e66be7fbac970f5b05aff6ddf1499e717534c1af/luci.patch | patch -p1
-popd
 # m4 compile error patch
 #wget https://raw.githubusercontent.com/keyfour/openwrt/2722d51c5cf6a296b8ecf7ae09e46690403a6c3d/tools/m4/patches/011-fix-sigstksz.patch
 #mv 011-fix-sigstksz.patch tools/m4/patches
