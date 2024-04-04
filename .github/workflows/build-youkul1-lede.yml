@@ -14,7 +14,7 @@
 #-------------------------------------------------------------------------------------------------------
 
 # Workflow name which is showed in GitHub Actions.
-name: Build Lean's LEDE for youkul1
+name: Build Lean's LEDE for youku l1
 
 on:
   workflow_dispatch:
