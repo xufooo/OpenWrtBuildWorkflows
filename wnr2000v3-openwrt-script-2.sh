@@ -18,9 +18,10 @@
 #git apply example.patch
 
 # add fullcone nat
-mkdir -p package/network/config/firewall/patches
-wget -O package/network/config/firewall/patches/fullconenat.patch https://raw.githubusercontent.com/LGA1150/fullconenat-fw3-patch/e66be7fbac970f5b05aff6ddf1499e717534c1af/fullconenat.patch
-wget -O- https://raw.githubusercontent.com/LGA1150/fullconenat-fw3-patch/e66be7fbac970f5b05aff6ddf1499e717534c1af/Makefile.patch | patch -p1
+# Download fullconenat.patch to package/network/config/firewall/patches/
+mkdir package/network/config/firewall/patches
+wget -P package/network/config/firewall/patches/ https://github.com/LGA1150/fullconenat-fw3-patch/raw/master/fullconenat.patch
+# Patch LuCI
 pushd feeds/luci
-wget -O- https://raw.githubusercontent.com/LGA1150/fullconenat-fw3-patch/e66be7fbac970f5b05aff6ddf1499e717534c1af/luci.patch | patch -p1
+wget -O- https://github.com/LGA1150/fullconenat-fw3-patch/raw/master/luci.patch | git apply
 popd
