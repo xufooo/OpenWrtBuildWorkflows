@@ -17,8 +17,7 @@
 #EOF
 #git apply example.patch
 
-# fullcone nat
-git clone -b master --single-branch https://github.com/LGA1150/openwrt-fullconenat package/fullconenat
+# add fullcone nat
 mkdir -p package/network/config/firewall/patches
 wget -O package/network/config/firewall/patches/fullconenat.patch https://raw.githubusercontent.com/LGA1150/fullconenat-fw3-patch/e66be7fbac970f5b05aff6ddf1499e717534c1af/fullconenat.patch
 wget -O- https://raw.githubusercontent.com/LGA1150/fullconenat-fw3-patch/e66be7fbac970f5b05aff6ddf1499e717534c1af/Makefile.patch | patch -p1
