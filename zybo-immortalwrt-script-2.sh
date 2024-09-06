@@ -24,4 +24,4 @@ sed -i 's/\/var\/adguardhome/\/etc\/AdGuardHome/g' feeds/packages/net/adguardhom
 sed -i 's/adguardhome.yaml/AdGuardHome.yaml/g' feeds/packages/net/adguardhome/files/adguardhome.init
 
 # Fix mosdns conflict with luci-app-mosdns
-cp feeds/smpackage/mosdns/Makefile feeds/packages/net/mosdns/Makefile 
+# cp feeds/smpackage/mosdns/Makefile feeds/packages/net/mosdns/Makefile 
