@@ -36,7 +36,7 @@ env:
   # other workflows.
   REPO_NAME: immortalwrt_zybo
   REPO_URL: https://github.com/immortalwrt/immortalwrt.git
-  REPO_BRANCH: v23.05.3
+  REPO_BRANCH: v23.05.2
   BUILD_DEPENDS:  "ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
                    bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib \
                    git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev \
