@@ -68,7 +68,7 @@ env:
 jobs:
   check:
     name: Check for source code updates
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     outputs:
       cache-hit: ${{ steps.cache-hash.outputs.cache-hit }}
 
