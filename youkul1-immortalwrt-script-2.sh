@@ -26,9 +26,9 @@
 #sed -i '/PKG_BUILD_DIR/a\PKG_USE_MIPS16:=0' feeds/packages/utils/v2dat/Makefile
 # fix v24.10.0 has no shadowsocks-libev
 git clone --filter=blob:none --no-checkout https://github.com/immortalwrt/packages.git pack
-pushd pack
+cd ./pack
 git sparse-checkout init --cone
 git sparse-checkout set net/shadowsocks-libev
 git checkout openwrt-23.05 
-popd
+cd ..
 cp -r pack/net/shadowsocks-libev feeds/packages/net/shadowsocks-libev
