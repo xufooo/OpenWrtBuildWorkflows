@@ -41,7 +41,3 @@
 #echo 'src-git small https://github.com/kenzok8/small' >> feeds.conf.default
 sed -i '$a src-git smpackage https://github.com/kenzok8/small-package' feeds.conf.default
 #sed -i 's/^#\(.*helloworld\)/\1/' feeds.conf.default
-# fix v24.10.0 has no shadowsocks-libev
-git clone -b openwrt-23.05 https://github.com/immortalwrt/packages.git pack
-mkdir -p feeds/packages/net
-cp -r pack/net/shadowsocks-libev feeds/packages/net/shadowsocks-libev
