@@ -24,6 +24,3 @@
 #git apply example.patch 
 # fix v2dat build error
 #sed -i '/PKG_BUILD_DIR/a\PKG_USE_MIPS16:=0' feeds/packages/utils/v2dat/Makefile
-# fix v24.10.0 has no shadowsocks-libev
-git clone -b openwrt-23.05 https://github.com/immortalwrt/packages.git pack
-cp -r pack/net/shadowsocks-libev feeds/packages/net/shadowsocks-libev
