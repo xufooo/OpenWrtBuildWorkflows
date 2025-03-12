@@ -31,5 +31,5 @@
 #sed -i '/PKG_BUILD_DIR/a\PKG_USE_MIPS16:=0' feeds/packages/utils/v2dat/Makefile
 # fix v24.10.0 has no shadowsocks-libev
 git clone -b openwrt-23.05 https://github.com/immortalwrt/packages.git pack
-cp -r pack/net/shadowsocks-libev package/feeds/packages/shadowsocks-libev
-wget -P package/feeds/packages/shadowsocks-libev/patch/ https://raw.githubusercontent.com/zxlhhyccc/packages-2/3f33259b94c0faf32a363817476ef62d00e71910/net/shadowsocks-libev/patches/101-fix-mbedtls3.6-build.patch
+cp -r pack/net/shadowsocks-libev package/feeds/packages/shadowsocks-libev   
+#wget -P package/feeds/packages/shadowsocks-libev/patch/ https://raw.githubusercontent.com/zxlhhyccc/packages-2/3f33259b94c0faf32a363817476ef62d00e71910/net/shadowsocks-libev/patches/101-fix-mbedtls3.6-build.patch
