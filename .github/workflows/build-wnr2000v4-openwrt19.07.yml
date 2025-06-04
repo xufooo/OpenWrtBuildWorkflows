@@ -69,7 +69,7 @@ env:
 jobs:
   check:
     name: Check for source code updates
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     outputs:
       cache-hit: ${{ steps.cache-hash.outputs.cache-hit }}
 
@@ -95,7 +95,7 @@ jobs:
 
   build:
     name: Build firmware
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     needs: check
     permissions:
       contents: write
@@ -254,7 +254,7 @@ jobs:
 
   clean:
     name: Clean up old assets
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     permissions:
       actions: write
       contents: write
