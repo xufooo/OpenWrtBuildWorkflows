@@ -1,4 +1,4 @@
-
+﻿
 #
 # Copyright (c) 2022-2023 Curious <https://www.curious.host>
 #
@@ -170,10 +170,6 @@ jobs:
         id: download-packages
         run: |
           cd openwrt/
-          make defconfig
-          echo "CONFIG_PACKAGE_shadowsocks-libev-config=y" >> .config
-          echo "CONFIG_PACKAGE_shadowsocks-libev-ss-local=y" >> .config
-          echo "CONFIG_PACKAGE_shadowsocks-libev-ss-redir=y" >> .config
           make defconfig
           make download -j8
           find dl -size -1024c -exec ls -l {} \;
