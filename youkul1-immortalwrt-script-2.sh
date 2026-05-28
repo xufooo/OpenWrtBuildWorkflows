@@ -9,6 +9,7 @@
 #
 # 1. Add stub shadowsocks-libev-config package + sslocal symlink
 # 2. Patch SSR Plus: Makefile Kconfig + client-config.lua type dropdown
+# 3. Patch SSR Plus init script for full ss-libev routing support
 
 # --- shadowsocks-libev: config stub + sslocal symlink ---
 cd feeds/smpackage/shadowsocks-libev
@@ -33,12 +34,13 @@ sed -i '/Package\/shadowsocks-libev-ss-redir\/install/{n;/\$(INSTALL_BIN)/a\\t\$
 
 cd ../../..
 
-# --- SSR Plus: patch Makefile + client-config.lua ---
+# --- SSR Plus: patch Makefile + client-config.lua + init script ---
 python3 << 'PYEOF'
 import sys, os
 
-# === Patch SSR Plus Makefile (Kconfig) ===
 base = 'feeds/smpackage/luci-app-ssr-plus'
+
+# === Patch SSR Plus Makefile (Kconfig) ===
 with open(f'{base}/Makefile', 'r') as f:
     content = f.read()
 
@@ -65,14 +67,11 @@ print("SSR Plus Makefile: done")
 with open(f'{base}/luasrc/model/cbi/shadowsocksr/client-config.lua', 'r') as f:
     content = f.read()
 
-# Add ss-libev to type dropdown (after ss-rust)
 content = content.replace(
     '\to:value("ss-rust", translate("ShadowSocks"))',
     '\to:value("ss-rust", translate("ShadowSocks"))\n\to:value("ss-libev", translate("ShadowSocks Libev"))'
 )
 
-# Add ss-libev to all depends chains that have both "ss" and "ss-rust"
-# Pattern: o:depends("type", "ss-rust") → add ss-libev right after
 content = content.replace(
     'o:depends("type", "ss-rust")',
     'o:depends("type", "ss-rust")\n\to:depends("type", "ss-libev")'
@@ -81,7 +80,104 @@ content = content.replace(
 with open(f'{base}/luasrc/model/cbi/shadowsocksr/client-config.lua', 'w') as f:
     f.write(content)
 print("SSR Plus client-config.lua: done")
+
+# === Patch init script for full ss-libev support ===
+init_path = f'{base}/root/etc/init.d/shadowsocksr'
+with open(init_path, 'r') as f:
+    content = f.read()
+
+# 1. Detection: add ss-redir+ss-local check BEFORE sslocal check
+#    Prevents auto-conversion of ss-libev nodes to ss-rust
+old_detect = (
+    '\t\telif [ -n "$(first_type sslocal)" ]; then\n'
+    '\t\t\tuci -q set "$NAME.$section.type=ss-rust"\n'
+    '\t\t\tchanged=1'
+)
+new_detect = (
+    '\t\telif [ -n "$(first_type ss-redir)" ] && [ -n "$(first_type ss-local)" ]; then\n'
+    '\t\t\t[ "$type" != "ss-libev" ] && { uci -q set "$NAME.$section.type=ss-libev"; changed=1; }\n'
+    '\t\telif [ -n "$(first_type sslocal)" ]; then\n'
+    '\t\t\tuci -q set "$NAME.$section.type=ss-rust"\n'
+    '\t\t\tchanged=1'
+)
+if old_detect in content:
+    content = content.replace(old_detect, new_detect)
+    print("init: detection block patched")
+else:
+    print("WARNING: detection block NOT found")
+
+# 2. UDP normalization: route ss-libev into "ss" case
+old = '\tif [ "$udp_relay_server_type" = "ss-rust" ]; then\n\t\ttype="ss"\n\tfi'
+new = '\tif [ "$udp_relay_server_type" = "ss-rust" ] || [ "$udp_relay_server_type" = "ss-libev" ]; then\n\t\ttype="ss"\n\tfi'
+if old in content:
+    content = content.replace(old, new)
+    print("init: UDP normalization patched")
+else:
+    print("WARNING: UDP normalization NOT found")
+
+# 3. SOCKS normalization
+old = '\tif [ "$local_server_type" = "ss-rust" ]; then\n\t\ttype="ss"\n\tfi'
+new = '\tif [ "$local_server_type" = "ss-rust" ] || [ "$local_server_type" = "ss-libev" ]; then\n\t\ttype="ss"\n\tfi'
+if old in content:
+    content = content.replace(old, new)
+    print("init: SOCKS normalization patched")
+else:
+    print("WARNING: SOCKS normalization NOT found")
+
+# 4. TCP normalization
+old = '\tif [ "$global_server_type" = "ss-rust" ]; then\n\t\ttype="ss"\n\tfi'
+new = '\tif [ "$global_server_type" = "ss-rust" ] || [ "$global_server_type" = "ss-libev" ]; then\n\t\ttype="ss"\n\tfi'
+if old in content:
+    content = content.replace(old, new)
+    print("init: TCP normalization patched")
+else:
+    print("WARNING: TCP normalization NOT found")
+
+# 5. Server normalization
+old = '\t\t\tif [ "$node_type" = "ss-rust" ]; then\n\t\t\t\ttype="ss"\n\t\t\tfi'
+new = '\t\t\tif [ "$node_type" = "ss-rust" ] || [ "$node_type" = "ss-libev" ]; then\n\t\t\t\ttype="ss"\n\t\t\tfi'
+if old in content:
+    content = content.replace(old, new)
+    print("init: Server normalization patched")
+else:
+    print("WARNING: Server normalization NOT found")
+
+# 6. UDP binary selection: add ss-libev so ss_program is not empty
+old = (
+    '\t\t\telif [ "$udp_relay_server_type" = "ss-rust" ]'
+    ' || [ "$udp_relay_server_type" = "ss" ]; then'
+)
+new = (
+    '\t\t\telif [ "$udp_relay_server_type" = "ss-rust" ]'
+    ' || [ "$udp_relay_server_type" = "ss" ]'
+    ' || [ "$udp_relay_server_type" = "ss-libev" ]; then'
+)
+if old in content:
+    content = content.replace(old, new)
+    print("init: UDP binary selection patched")
+else:
+    print("WARNING: UDP binary selection NOT found")
+
+# 7. Server binary selection: add ss-libev
+old = (
+    '\t\t\t\t\telif [ "$node_type" = "ss-rust" ]'
+    ' || [ "$node_type" = "ss" ]; then'
+)
+new = (
+    '\t\t\t\t\telif [ "$node_type" = "ss-rust" ]'
+    ' || [ "$node_type" = "ss" ]'
+    ' || [ "$node_type" = "ss-libev" ]; then'
+)
+if old in content:
+    content = content.replace(old, new)
+    print("init: Server binary selection patched")
+else:
+    print("WARNING: Server binary selection NOT found")
+
+with open(init_path, 'w') as f:
+    f.write(content)
+print("SSR Plus init script: done")
 PYEOF
 
-# Suppress AUTORELEASE warnings
-find feeds -name Makefile -exec sed -i -e 's/PKG_RELEASE:=\$(AUTORELEASE)/PKG_RELEASE:=1/g' -e 's/PKG_RELEASE:=AUTORELEASE/PKG_RELEASE:=1/g' {} + 2>/dev/null || true
+# Suppress AUTORELEASE deprecation warnings
+find feeds -name Makefile -exec sed -i -e 's/PKG_RELEASE:=\$(AUTORELEASE)/PKG_RELEASE:=1/g' -e 's/PKG_RELEASE=\$(AUTORELEASE)/PKG_RELEASE:=1/g' -e 's/PKG_RELEASE:=AUTORELEASE/PKG_RELEASE:=1/g' {} + 2>/dev/null || true
