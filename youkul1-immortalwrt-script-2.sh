@@ -8,7 +8,7 @@
 #-------------------------------------------------------------------------------------------------------
 #
 # 1. Add stub shadowsocks-libev-config package + sslocal symlink
-# 2. Patch SSR Plus Makefile to restore Shadowsocks_Libev_Client (Python for reliability)
+# 2. Patch SSR Plus: Makefile Kconfig + client-config.lua type dropdown
 
 # --- shadowsocks-libev: config stub + sslocal symlink ---
 cd feeds/smpackage/shadowsocks-libev
@@ -33,35 +33,54 @@ sed -i '/Package\/shadowsocks-libev-ss-redir\/install/{n;/\$(INSTALL_BIN)/a\\t\$
 
 cd ../../..
 
-# --- SSR Plus: add Shadowsocks_Libev_Client using Python ---
+# --- SSR Plus: patch Makefile + client-config.lua ---
 python3 << 'PYEOF'
-import sys
+import sys, os
 
-with open('feeds/smpackage/luci-app-ssr-plus/Makefile', 'r') as f:
+# === Patch SSR Plus Makefile (Kconfig) ===
+base = 'feeds/smpackage/luci-app-ssr-plus'
+with open(f'{base}/Makefile', 'r') as f:
     content = f.read()
 
-# 1. PKG_CONFIG_DEPENDS: insert before NONE_Client
 content = content.replace(
     'CONFIG_PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_NONE_Client \\',
     'CONFIG_PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client \\\n\tCONFIG_PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_NONE_Client \\'
 )
 
-# 2. LUCI_DEPENDS: insert before Rust_Client:sslocal
 content = content.replace(
     '+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Client:shadowsocks-rust-sslocal \\',
     '+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client:shadowsocks-libev-ss-local \\\n\t+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client:shadowsocks-libev-ss-redir \\\n\t+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Client:shadowsocks-rust-sslocal \\'
 )
 
-# 3. Kconfig: insert before Shadowsocks_Rust_Client in Shadowsocks Client choice
 content = content.replace(
     '\tconfig PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Client',
     '\tconfig PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client\n\t\tbool "Shadowsocks Libev"\n\t\tdefault n\n\n\tconfig PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Client'
 )
 
-with open('feeds/smpackage/luci-app-ssr-plus/Makefile', 'w') as f:
+with open(f'{base}/Makefile', 'w') as f:
     f.write(content)
+print("SSR Plus Makefile: done")
 
-print("SSR Plus Makefile patched successfully")
+# === Patch client-config.lua (node type dropdown + depends) ===
+with open(f'{base}/luasrc/model/cbi/shadowsocksr/client-config.lua', 'r') as f:
+    content = f.read()
+
+# Add ss-libev to type dropdown (after ss-rust)
+content = content.replace(
+    '\to:value("ss-rust", translate("ShadowSocks"))',
+    '\to:value("ss-rust", translate("ShadowSocks"))\n\to:value("ss-libev", translate("ShadowSocks Libev"))'
+)
+
+# Add ss-libev to all depends chains that have both "ss" and "ss-rust"
+# Pattern: o:depends("type", "ss-rust") → add ss-libev right after
+content = content.replace(
+    'o:depends("type", "ss-rust")',
+    'o:depends("type", "ss-rust")\n\to:depends("type", "ss-libev")'
+)
+
+with open(f'{base}/luasrc/model/cbi/shadowsocksr/client-config.lua', 'w') as f:
+    f.write(content)
+print("SSR Plus client-config.lua: done")
 PYEOF
 
 # Suppress AUTORELEASE warnings
