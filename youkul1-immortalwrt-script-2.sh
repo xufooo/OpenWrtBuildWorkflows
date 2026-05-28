@@ -19,8 +19,8 @@ rm -rf /tmp/imm-packages
 cd package/feeds/packages/shadowsocks-libev
 sed -i 's/PKG_VERSION:=3.3.5/PKG_VERSION:=3.3.6/' Makefile
 sed -i 's/PKG_RELEASE:=11/PKG_RELEASE:=1/' Makefile
-sed -i 's|PKG_SOURCE_URL:=https://github.com/shadowsocks/shadowsocks-libev/releases/download/v\$(PKG_VERSION)|PKG_SOURCE_URL:=https://github.com/shadowsocks/shadowsocks-libev/releases/download/v\$(PKG_VERSION)|' Makefile
-sed -i 's/PKG_HASH:=cfc8eded35360f4b67e18dc447b0c00cddb29cc57a3cec48b135e5fb87433488/PKG_HASH:=361cb5479a72a32f1defe904a6ab9151dc417e749e7ae5ae97ede295adaa65f4/' Makefile
+sed -i 's|PKG_SOURCE_URL:=https://github.com/shadowsocks/shadowsocks-libev/releases/download/v\$(PKG_VERSION)|PKG_SOURCE_URL:=https://codeload.github.com/shadowsocks/shadowsocks-libev/tar.gz/v\$(PKG_VERSION)?|' Makefile
+sed -i 's/PKG_HASH:=cfc8eded35360f4b67e18dc447b0c00cddb29cc57a3cec48b135e5fb87433488/PKG_HASH:=skip/' Makefile
 # Remove old patches (not needed for v3.3.6)
 rm -rf patches/
 
