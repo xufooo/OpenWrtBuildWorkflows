@@ -24,5 +24,8 @@ sed -i 's/PKG_HASH:=cfc8eded35360f4b67e18dc447b0c00cddb29cc57a3cec48b135e5fb8743
 # Remove old patches (not needed for v3.3.6)
 rm -rf patches/
 
+# v3.3.6 release tarball may have stale autotools files; force autoconf regeneration
+sed -i '/^include \$(INCLUDE_DIR)\/package\.mk/i PKG_FIXUP:=autoreconf' Makefile
+
 # Suppress AUTORELEASE warnings in third-party feeds
 find ../../feeds -name Makefile -exec sed -i -e 's/PKG_RELEASE:=$(AUTORELEASE)/PKG_RELEASE:=1/g' -e 's/PKG_RELEASE:=AUTORELEASE/PKG_RELEASE:=1/g' {} + 2>/dev/null || true
