@@ -25,4 +25,4 @@ sed -i 's/PKG_HASH:=cfc8eded35360f4b67e18dc447b0c00cddb29cc57a3cec48b135e5fb8743
 rm -rf patches/
 
 # Suppress AUTORELEASE warnings in third-party feeds
-find ../../feeds/smpackage -name Makefile -exec sed -i 's/PKG_RELEASE:=AUTORELEASE/PKG_RELEASE:=1/g' {} + 2>/dev/null || true
+find ../../feeds -name Makefile -exec sed -i -e 's/PKG_RELEASE:=$(AUTORELEASE)/PKG_RELEASE:=1/g' -e 's/PKG_RELEASE:=AUTORELEASE/PKG_RELEASE:=1/g' {} + 2>/dev/null || true
