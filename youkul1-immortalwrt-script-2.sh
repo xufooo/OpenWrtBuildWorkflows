@@ -5,24 +5,24 @@
 # See /LICENSE for more information.
 # 
 # https://github.com/Curious-r/OpenWrtBuildWorkflows
-# Description: Automatically check OpenWrt source code update and build it. No additional keys are required.
 #-------------------------------------------------------------------------------------------------------
 #
-#
-# Patching is generally recommended.
-# # Here's a template for patching:
+# shadowsocks-libev: use upstream v3.3.6 with native mbedTLS 3.6+ support
+# (no patches needed - upstream fixed private_ field access)
 
+# Get the OpenWrt packaging files (Makefile, init, config) from ImmortalWrt packages
+git clone --depth 1 -b openwrt-23.05 https://github.com/immortalwrt/packages.git /tmp/imm-packages
+cp -r /tmp/imm-packages/net/shadowsocks-libev package/feeds/packages/shadowsocks-libev
+rm -rf /tmp/imm-packages
 
-#touch example.patch
-#cat>example.patch<<EOF
-#patch content
-#EOF
-#git apply example.patch
-# fix v2dat build error
-#sed -i '/PKG_BUILD_DIR/a\PKG_USE_MIPS16:=0' feeds/packages/utils/v2dat/Makefile
-# fix v24.10.0 has no shadowsocks-libev
-#git clone -b openwrt-23.05 https://github.com/immortalwrt/packages.git pack
-#cp -r pack/net/shadowsocks-libev package/feeds/packages/shadowsocks-libev
-#wget -P package/feeds/packages/shadowsocks-libev/patch/ https://raw.githubusercontent.com/zxlhhyccc/packages-2/3f33259b94c0faf32a363817476ef62d00e71910/net/shadowsocks-libev/patches/101-fix-mbedtls3.6-build.patch
-# shadowsocks-libev is now provided by kenzok8/small-package feed (added via script-1)
-# No additional clone needed.
+# Update Makefile to use upstream v3.3.6
+cd package/feeds/packages/shadowsocks-libev
+sed -i 's/PKG_VERSION:=3.3.5/PKG_VERSION:=3.3.6/' Makefile
+sed -i 's/PKG_RELEASE:=11/PKG_RELEASE:=1/' Makefile
+sed -i 's|PKG_SOURCE_URL:=https://github.com/shadowsocks/shadowsocks-libev/releases/download/v\$(PKG_VERSION)|PKG_SOURCE_URL:=https://github.com/shadowsocks/shadowsocks-libev/releases/download/v\$(PKG_VERSION)|' Makefile
+sed -i 's/PKG_HASH:=cfc8eded35360f4b67e18dc447b0c00cddb29cc57a3cec48b135e5fb87433488/PKG_HASH:=361cb5479a72a32f1defe904a6ab9151dc417e749e7ae5ae97ede295adaa65f4/' Makefile
+# Remove old patches (not needed for v3.3.6)
+rm -rf patches/
+
+# Suppress AUTORELEASE warnings in third-party feeds
+find ../../feeds/smpackage -name Makefile -exec sed -i 's/PKG_RELEASE:=AUTORELEASE/PKG_RELEASE:=1/g' {} + 2>/dev/null || true
