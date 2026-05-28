@@ -7,14 +7,12 @@
 # https://github.com/Curious-r/OpenWrtBuildWorkflows
 #-------------------------------------------------------------------------------------------------------
 #
-# 1. Add stub shadowsocks-libev-config package
-# 2. Create sslocal -> ss-redir symlink (SSR Plus init script hardcodes sslocal binary)
-# 3. Patch SSR Plus Kconfig to add Shadowsocks_Libev_Client option
+# 1. Add stub shadowsocks-libev-config package + sslocal symlink
+# 2. Patch SSR Plus Makefile to restore Shadowsocks_Libev_Client (Python for reliability)
 
-# --- shadowsocks-libev: add config stub + sslocal symlink ---
+# --- shadowsocks-libev: config stub + sslocal symlink ---
 cd feeds/smpackage/shadowsocks-libev
 
-# Add stub config package
 cat >> Makefile << 'EOF'
 
 define Package/shadowsocks-libev-config
@@ -30,25 +28,41 @@ endef
 $(eval $(call BuildPackage,shadowsocks-libev-config))
 EOF
 
-# Add sslocal -> ss-redir symlink to ss-redir install step
 sed -i '/Package\/shadowsocks-libev-ss-redir\/install/{n;/\$(INSTALL_BIN)/a\\t\$(LN) ss-redir \$(1)/usr/bin/sslocal
 }' Makefile
 
 cd ../../..
 
-# --- SSR Plus: add Shadowsocks_Libev_Client to Kconfig ---
-cd feeds/smpackage/luci-app-ssr-plus
+# --- SSR Plus: add Shadowsocks_Libev_Client using Python ---
+python3 << 'PYEOF'
+import sys
 
-# Add to PKG_CONFIG_DEPENDS
-sed -i '/INCLUDE_Shadowsocks_NONE_Client/i\\tCONFIG_PACKAGE_\$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client \\' Makefile
+with open('feeds/smpackage/luci-app-ssr-plus/Makefile', 'r') as f:
+    content = f.read()
 
-# Add to LUCI_DEPENDS
-sed -i '/INCLUDE_Shadowsocks_Rust_Client:shadowsocks-rust-sslocal/i\\t+PACKAGE_\$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client:shadowsocks-libev-ss-local \\\n\t+PACKAGE_\$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client:shadowsocks-libev-ss-redir \\' Makefile
+# 1. PKG_CONFIG_DEPENDS: insert before NONE_Client
+content = content.replace(
+    'CONFIG_PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_NONE_Client \\',
+    'CONFIG_PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client \\\n\tCONFIG_PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_NONE_Client \\'
+)
 
-# Add Kconfig option before Shadowsocks_Rust_Client
-sed -i '/config PACKAGE_\$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Client/i\\tconfig PACKAGE_\$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client\n\t\tbool "Shadowsocks Libev"\n\t\tdefault n\n' Makefile
+# 2. LUCI_DEPENDS: insert before Rust_Client:sslocal
+content = content.replace(
+    '+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Client:shadowsocks-rust-sslocal \\',
+    '+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client:shadowsocks-libev-ss-local \\\n\t+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client:shadowsocks-libev-ss-redir \\\n\t+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Client:shadowsocks-rust-sslocal \\'
+)
 
-cd ../../..
+# 3. Kconfig: insert before Shadowsocks_Rust_Client in Shadowsocks Client choice
+content = content.replace(
+    '\tconfig PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Client',
+    '\tconfig PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client\n\t\tbool "Shadowsocks Libev"\n\t\tdefault n\n\n\tconfig PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Client'
+)
+
+with open('feeds/smpackage/luci-app-ssr-plus/Makefile', 'w') as f:
+    f.write(content)
+
+print("SSR Plus Makefile patched successfully")
+PYEOF
 
 # Suppress AUTORELEASE warnings
 find feeds -name Makefile -exec sed -i -e 's/PKG_RELEASE:=\$(AUTORELEASE)/PKG_RELEASE:=1/g' -e 's/PKG_RELEASE:=AUTORELEASE/PKG_RELEASE:=1/g' {} + 2>/dev/null || true
