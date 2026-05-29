@@ -250,5 +250,10 @@ sed -i '/echolog "Main node:Shadowsocks-rust Started!"/c\                       
 sed -i '/echolog "Global_Socks5:Shadowsocks-rust Started!"/c\                if [ "$local_server_type" = "ss-libev" ]; then\n                                echolog "Global_Socks5:Shadowsocks Libev Started!"\n                        else\n                                echolog "Global_Socks5:Shadowsocks-rust Started!"\n                        fi' feeds/smpackage/luci-app-ssr-plus/root/etc/init.d/shadowsocksr
 echo "init: display name patched (ss-libev)"
 
+
+# 12. UDP relay mode: add ss-libev support
+sed -i '1609s/.*/\t[[ "$type" = "ss-rust" ]] || [[ "$type" = "ss-libev" ]] \&\& type="ss"/' feeds/smpackage/luci-app-ssr-plus/root/etc/init.d/shadowsocksr
+echo "init: UDP relay mode patched"
+
 # Suppress AUTORELEASE deprecation warnings
 find feeds -name Makefile -exec sed -i -e 's/PKG_RELEASE:=\$(AUTORELEASE)/PKG_RELEASE:=1/g' -e 's/PKG_RELEASE=\$(AUTORELEASE)/PKG_RELEASE:=1/g' -e 's/PKG_RELEASE:=AUTORELEASE/PKG_RELEASE:=1/g' {} + 2>/dev/null || true
