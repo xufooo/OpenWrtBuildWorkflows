@@ -238,5 +238,10 @@ with open(init_path, 'w') as f:
 print("SSR Plus init script: done")
 PYEOF
 
+
+# Patch gen_config.lua: handle ss-libev type
+sed -i 's/if server.type == "ss-rust" then/if server.type == "ss-rust" or server.type == "ss-libev" then/' feeds/smpackage/luci-app-ssr-plus/root/usr/share/shadowsocksr/gen_config.lua
+echo "gen_config.lua: ss-libev type mapping added"
+
 # Suppress AUTORELEASE deprecation warnings
 find feeds -name Makefile -exec sed -i -e 's/PKG_RELEASE:=\$(AUTORELEASE)/PKG_RELEASE:=1/g' -e 's/PKG_RELEASE=\$(AUTORELEASE)/PKG_RELEASE:=1/g' -e 's/PKG_RELEASE:=AUTORELEASE/PKG_RELEASE:=1/g' {} + 2>/dev/null || true
