@@ -7,11 +7,11 @@
 # https://github.com/Curious-r/OpenWrtBuildWorkflows
 #-------------------------------------------------------------------------------------------------------
 #
-# 1. Add stub shadowsocks-libev-config package (with sslocal symlink)
+# 1. Add stub shadowsocks-libev-config package
 # 2. Patch SSR Plus: Makefile Kconfig + client-config.lua type dropdown
-# 3. Patch SSR Plus init script for full ss-libev routing support
+# 3. Patch SSR Plus init script for native ss-libev binary routing (no symlink)
 
-# --- shadowsocks-libev: config stub + sslocal symlink ---
+# --- shadowsocks-libev: config stub ---
 cd feeds/smpackage/shadowsocks-libev
 
 cat >> Makefile << 'EOF'
@@ -24,8 +24,6 @@ endef
 define Package/shadowsocks-libev-config/install
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_DIR) $(1)/etc/init.d
-	$(INSTALL_DIR) $(1)/usr/bin
-	$(LN) ss-redir $(1)/usr/bin/sslocal
 endef
 
 $(eval $(call BuildPackage,shadowsocks-libev-config))
@@ -106,13 +104,12 @@ with open(f'{base}/luasrc/model/cbi/shadowsocksr/client-config.lua', 'w') as f:
     f.write(content)
 print("SSR Plus client-config.lua: done")
 
-# === Patch init script for full ss-libev support ===
+# === Patch init script for native ss-libev binary routing ===
 init_path = f'{base}/root/etc/init.d/shadowsocksr'
 with open(init_path, 'r') as f:
     content = f.read()
 
 # 1. Detection: add ss-redir+ss-local check BEFORE sslocal check
-#    Prevents auto-conversion of ss-libev nodes to ss-rust
 old_detect = (
     '\t\telif [ -n "$(first_type sslocal)" ]; then\n'
     '\t\t\tuci -q set "$NAME.$section.type=ss-rust"\n'
@@ -131,14 +128,13 @@ if old_detect in content:
 else:
     print("WARNING: detection block NOT found")
 
-# 2. UDP normalization: route ss-libev into "ss" case
+# 2. UDP normalization
 old = '\tif [ "$udp_relay_server_type" = "ss-rust" ]; then\n\t\ttype="ss"\n\tfi'
 new = '\tif [ "$udp_relay_server_type" = "ss-rust" ] || [ "$udp_relay_server_type" = "ss-libev" ]; then\n\t\ttype="ss"\n\tfi'
 if old in content:
     content = content.replace(old, new)
     print("init: UDP normalization patched")
-else:
-    print("WARNING: UDP normalization NOT found")
+else: print("WARNING: UDP normalization NOT found")
 
 # 3. SOCKS normalization
 old = '\tif [ "$local_server_type" = "ss-rust" ]; then\n\t\ttype="ss"\n\tfi'
@@ -146,8 +142,7 @@ new = '\tif [ "$local_server_type" = "ss-rust" ] || [ "$local_server_type" = "ss
 if old in content:
     content = content.replace(old, new)
     print("init: SOCKS normalization patched")
-else:
-    print("WARNING: SOCKS normalization NOT found")
+else: print("WARNING: SOCKS normalization NOT found")
 
 # 4. TCP normalization
 old = '\tif [ "$global_server_type" = "ss-rust" ]; then\n\t\ttype="ss"\n\tfi'
@@ -155,8 +150,7 @@ new = '\tif [ "$global_server_type" = "ss-rust" ] || [ "$global_server_type" = "
 if old in content:
     content = content.replace(old, new)
     print("init: TCP normalization patched")
-else:
-    print("WARNING: TCP normalization NOT found")
+else: print("WARNING: TCP normalization NOT found")
 
 # 5. Server normalization
 old = '\t\t\tif [ "$node_type" = "ss-rust" ]; then\n\t\t\t\ttype="ss"\n\t\t\tfi'
@@ -164,26 +158,67 @@ new = '\t\t\tif [ "$node_type" = "ss-rust" ] || [ "$node_type" = "ss-libev" ]; t
 if old in content:
     content = content.replace(old, new)
     print("init: Server normalization patched")
-else:
-    print("WARNING: Server normalization NOT found")
+else: print("WARNING: Server normalization NOT found")
 
-# 6. UDP binary selection: add ss-libev so ss_program is not empty
-old = (
+# 6. UDP binary: split ss-libev into own branch using ss-redir directly
+old_udp_bin = (
     '\t\t\telif [ "$udp_relay_server_type" = "ss-rust" ]'
-    ' || [ "$udp_relay_server_type" = "ss" ]; then'
+    ' || [ "$udp_relay_server_type" = "ss" ]; then\n'
+    '\t\t\t\tss_program="$(first_type ${type}local)"'
 )
-new = (
+new_udp_bin = (
+    '\t\t\telif [ "$udp_relay_server_type" = "ss-libev" ]; then\n'
+    '\t\t\t\tss_program="$(first_type ss-redir)"\n'
     '\t\t\telif [ "$udp_relay_server_type" = "ss-rust" ]'
-    ' || [ "$udp_relay_server_type" = "ss" ]'
-    ' || [ "$udp_relay_server_type" = "ss-libev" ]; then'
+    ' || [ "$udp_relay_server_type" = "ss" ]; then\n'
+    '\t\t\t\tss_program="$(first_type ${type}local)"'
 )
-if old in content:
-    content = content.replace(old, new)
-    print("init: UDP binary selection patched")
-else:
-    print("WARNING: UDP binary selection NOT found")
+if old_udp_bin in content:
+    content = content.replace(old_udp_bin, new_udp_bin)
+    print("init: UDP binary split for ss-libev")
+else: print("WARNING: UDP binary block NOT found")
 
-# 7. Server binary selection: add ss-libev
+# 7. TCP binary: use ss-redir when type is ss-libev
+old_tcp = (
+    '\t\telse\n'
+    '\t\t\tgen_config_file $GLOBAL_SERVER $type 1 $tcp_port\n'
+    '\t\t\tss_program="$(first_type sslocal)"'
+)
+new_tcp = (
+    '\t\telse\n'
+    '\t\t\tgen_config_file $GLOBAL_SERVER $type 1 $tcp_port\n'
+    '\t\t\tif [ "$global_server_type" = "ss-libev" ]; then\n'
+    '\t\t\t\tss_program="$(first_type ss-redir)"\n'
+    '\t\t\telse\n'
+    '\t\t\t\tss_program="$(first_type sslocal)"\n'
+    '\t\t\tfi'
+)
+if old_tcp in content:
+    content = content.replace(old_tcp, new_tcp)
+    print("init: TCP binary patched for ss-libev")
+else: print("WARNING: TCP binary block NOT found")
+
+# 8. SOCKS binary: use ss-local when type is ss-libev
+old_socks = (
+    '\t\telse\n'
+    '\t\t\tgen_config_file $LOCAL_SERVER $type 4 $local_port\n'
+    '\t\t\tss_program="$(first_type sslocal)"'
+)
+new_socks = (
+    '\t\telse\n'
+    '\t\t\tgen_config_file $LOCAL_SERVER $type 4 $local_port\n'
+    '\t\t\tif [ "$local_server_type" = "ss-libev" ]; then\n'
+    '\t\t\t\tss_program="$(first_type ss-local)"\n'
+    '\t\t\telse\n'
+    '\t\t\t\tss_program="$(first_type sslocal)"\n'
+    '\t\t\tfi'
+)
+if old_socks in content:
+    content = content.replace(old_socks, new_socks)
+    print("init: SOCKS binary patched for ss-libev")
+else: print("WARNING: SOCKS binary block NOT found")
+
+# 9. Server binary selection
 old = (
     '\t\t\t\t\telif [ "$node_type" = "ss-rust" ]'
     ' || [ "$node_type" = "ss" ]; then'
@@ -196,8 +231,7 @@ new = (
 if old in content:
     content = content.replace(old, new)
     print("init: Server binary selection patched")
-else:
-    print("WARNING: Server binary selection NOT found")
+else: print("WARNING: Server binary selection NOT found")
 
 with open(init_path, 'w') as f:
     f.write(content)
