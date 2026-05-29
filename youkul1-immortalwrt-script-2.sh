@@ -252,7 +252,7 @@ echo "init: display name patched (ss-libev)"
 
 
 # 12. UDP relay mode: add ss-libev support
-sed -i '1609s/.*/\t[[ "$type" = "ss-rust" ]] || [[ "$type" = "ss-libev" ]] \&\& type="ss"/' feeds/smpackage/luci-app-ssr-plus/root/etc/init.d/shadowsocksr
+sed -i '/^\[ "$type" = "ss-rust" \] && type="ss"/c\{ [ "$type" = "ss-rust" ] || [ "$type" = "ss-libev" ]; } && type="ss"' feeds/smpackage/luci-app-ssr-plus/root/etc/init.d/shadowsocksr
 echo "init: UDP relay mode patched"
 
 # Suppress AUTORELEASE deprecation warnings
