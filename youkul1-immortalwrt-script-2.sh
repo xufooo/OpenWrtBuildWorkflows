@@ -7,7 +7,7 @@
 # https://github.com/Curious-r/OpenWrtBuildWorkflows
 #-------------------------------------------------------------------------------------------------------
 #
-# 1. Add stub shadowsocks-libev-config package + sslocal symlink
+# 1. Add stub shadowsocks-libev-config package (with sslocal symlink)
 # 2. Patch SSR Plus: Makefile Kconfig + client-config.lua type dropdown
 # 3. Patch SSR Plus init script for full ss-libev routing support
 
@@ -24,13 +24,12 @@ endef
 define Package/shadowsocks-libev-config/install
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(LN) ss-redir $(1)/usr/bin/sslocal
 endef
 
 $(eval $(call BuildPackage,shadowsocks-libev-config))
 EOF
-
-sed -i '/Package\/shadowsocks-libev-ss-redir\/install/{n;/\$(INSTALL_BIN)/a\\t\$(LN) ss-redir \$(1)/usr/bin/sslocal
-}' Makefile
 
 cd ../../..
 
@@ -49,10 +48,14 @@ content = content.replace(
     'CONFIG_PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client \\\n\tCONFIG_PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_NONE_Client \\'
 )
 
-content = content.replace(
-    '+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Client:shadowsocks-rust-sslocal \\',
-    '+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client:shadowsocks-libev-ss-local \\\n\t+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client:shadowsocks-libev-ss-redir \\\n\t+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Client:shadowsocks-rust-sslocal \\'
+old_dep = '+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Client:shadowsocks-rust-sslocal \\'
+new_dep = (
+    '+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client:shadowsocks-libev-config \\\n'
+    '\t+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client:shadowsocks-libev-ss-local \\\n'
+    '\t+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client:shadowsocks-libev-ss-redir \\\n'
+    '\t+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Client:shadowsocks-rust-sslocal \\'
 )
+content = content.replace(old_dep, new_dep)
 
 content = content.replace(
     '\tconfig PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Client',
