@@ -243,5 +243,12 @@ PYEOF
 sed -i 's/if server.type == "ss-rust" then/if server.type == "ss-rust" or server.type == "ss-libev" then/' feeds/smpackage/luci-app-ssr-plus/root/usr/share/shadowsocksr/gen_config.lua
 echo "gen_config.lua: ss-libev type mapping added"
 
+
+# Patch init script display: distinguish ss-libev from ss-rust
+sed -i '/echolog "Main node:Shadowsocks-rust Started!"/c\                        if [ "$global_server_type" = "ss-libev" ]; then\n                                echolog "Main node:Shadowsocks Libev Started!"\n                        else\n                                echolog "Main node:Shadowsocks-rust Started!"\n                        fi' feeds/smpackage/luci-app-ssr-plus/root/etc/init.d/shadowsocksr
+
+sed -i '/echolog "Global_Socks5:Shadowsocks-rust Started!"/c\                if [ "$local_server_type" = "ss-libev" ]; then\n                                echolog "Global_Socks5:Shadowsocks Libev Started!"\n                        else\n                                echolog "Global_Socks5:Shadowsocks-rust Started!"\n                        fi' feeds/smpackage/luci-app-ssr-plus/root/etc/init.d/shadowsocksr
+echo "init: display name patched (ss-libev)"
+
 # Suppress AUTORELEASE deprecation warnings
 find feeds -name Makefile -exec sed -i -e 's/PKG_RELEASE:=\$(AUTORELEASE)/PKG_RELEASE:=1/g' -e 's/PKG_RELEASE=\$(AUTORELEASE)/PKG_RELEASE:=1/g' -e 's/PKG_RELEASE:=AUTORELEASE/PKG_RELEASE:=1/g' {} + 2>/dev/null || true
