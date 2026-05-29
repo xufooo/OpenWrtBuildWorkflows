@@ -67,11 +67,33 @@ print("SSR Plus Makefile: done")
 with open(f'{base}/luasrc/model/cbi/shadowsocksr/client-config.lua', 'r') as f:
     content = f.read()
 
+# 1. Add has_ss_libev detection (independent of has_ss_rust)
 content = content.replace(
-    '\to:value("ss-rust", translate("ShadowSocks"))',
-    '\to:value("ss-rust", translate("ShadowSocks"))\n\to:value("ss-libev", translate("ShadowSocks Libev"))'
+    'local has_ss_rust = is_finded("sslocal") or is_finded("ssserver")',
+    'local has_ss_rust = is_finded("sslocal") or is_finded("ssserver")\nlocal has_ss_libev = is_finded("ss-redir") or is_finded("ss-local")'
 )
 
+# 2. Add ss-libev as independent block (NOT inside has_ss_rust)
+old_block = (
+    'if has_ss_rust then\n'
+    '\to:value("ss-rust", translate("ShadowSocks"))\n'
+    'end'
+)
+new_block = (
+    'if has_ss_rust then\n'
+    '\to:value("ss-rust", translate("ShadowSocks"))\n'
+    'end\n'
+    'if has_ss_libev then\n'
+    '\to:value("ss-libev", translate("ShadowSocks Libev"))\n'
+    'end'
+)
+if old_block in content:
+    content = content.replace(old_block, new_block)
+    print("lua: ss-libev type block added")
+else:
+    print("WARNING: ss-rust block NOT found in client-config.lua")
+
+# 3. Add ss-libev to all depends chains
 content = content.replace(
     'o:depends("type", "ss-rust")',
     'o:depends("type", "ss-rust")\n\to:depends("type", "ss-libev")'
