@@ -233,13 +233,14 @@ if old in content:
     print("init: Server binary selection patched")
 else: print("WARNING: Server binary selection NOT found")
 
-# 10. get_udp_relay_mode: add ss-libev to the ss-rust normalization
-old = '\t[ "$type" = "ss-rust" ] && type="ss"'
-new = '\t[ "$type" = "ss-rust" -o "$type" = "ss-libev" ] && type="ss"'
+# 10. get_udp_relay_mode: add ss-libev as split mode (uses REDIRECT, not TPROXY)
+#    Insert ss-libev case before clash|tuic, echoing "split"
+old = '\t\tclash|tuic)'
+new = '\t\tss-libev)\n\t\t\techo "split"\n\t\t\t;;\n\t\tclash|tuic)'
 if old in content:
-    content = content.replace(old, new)
-    print("init: get_udp_relay_mode patched")
-else: print("WARNING: get_udp_relay_mode NOT found")
+	content = content.replace(old, new)
+	print("init: get_udp_relay_mode: ss-libev -> split")
+else: print("WARNING: get_udp_relay_mode clash|tuic NOT found")
 
 with open(init_path, 'w') as f:
     f.write(content)
