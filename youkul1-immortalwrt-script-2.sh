@@ -235,8 +235,8 @@ else: print("WARNING: Server binary selection NOT found")
 
 # 10. get_udp_relay_mode: add ss-libev with custom sslibev mode (UDP REDIRECT, not TPROXY)
 #    Insert ss-libev case before clash|tuic, echoing "sslibev"
-old = '\t\tclash|tuic)'
-new = '\t\tss-libev)\n\t\t\techo "sslibev"\n\t\t\t;;\n\t\tclash|tuic)'
+old = '\tclash|tuic)'
+new = '\tss-libev)\n\t\techo "sslibev"\n\t\t;;\n\tclash|tuic)'
 if old in content:
 	content = content.replace(old, new)
 	print("init: get_udp_relay_mode: ss-libev -> sslibev")
@@ -244,8 +244,8 @@ else: print("WARNING: get_udp_relay_mode clash|tuic NOT found")
 
 
 # 10b. Add sslibev case in main udp_mode switch (no TPROXY, no UDP block; REDIRECT added separately)
-old2 = '\t\tsplit)\n\t\t\tmode="udp"'
-new2 = '\t\tsslibev)\n\t\t\tmode="tcp,udp"\n\t\t\ttcp_config_file=$TMP_PATH/tcp-udp-ssr-retcp.json\n\t\t\tARG_UDP=""\n\t\t\tARG_UDP_RULES="-y"\n\t\t\t;;\n\t\tsplit)\n\t\t\tmode="udp"'
+old2 = '\tsplit)\n\t\tmode="udp"'
+new2 = '\tsslibev)\n\t\tmode="tcp,udp"\n\t\ttcp_config_file=$TMP_PATH/tcp-udp-ssr-retcp.json\n\t\tARG_UDP=""\n\t\tARG_UDP_RULES="-y"\n\t\t;;\n\tsplit)\n\t\tmode="udp"'
 if old2 in content:
 	content = content.replace(old2, new2)
 	print("init: udp_mode sslibev case added (no TPROXY, REDIRECT handled separately)")
