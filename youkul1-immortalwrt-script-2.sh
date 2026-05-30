@@ -233,14 +233,22 @@ if old in content:
     print("init: Server binary selection patched")
 else: print("WARNING: Server binary selection NOT found")
 
-# 10. get_udp_relay_mode: add ss-libev as split mode (uses REDIRECT, not TPROXY)
-#    Insert ss-libev case before clash|tuic, echoing "split"
+# 10. get_udp_relay_mode: add ss-libev with custom sslibev mode (UDP REDIRECT, not TPROXY)
+#    Insert ss-libev case before clash|tuic, echoing "sslibev"
 old = '\t\tclash|tuic)'
-new = '\t\tss-libev)\n\t\t\techo "split"\n\t\t\t;;\n\t\tclash|tuic)'
+new = '\t\tss-libev)\n\t\t\techo "sslibev"\n\t\t\t;;\n\t\tclash|tuic)'
 if old in content:
 	content = content.replace(old, new)
-	print("init: get_udp_relay_mode: ss-libev -> split")
+	print("init: get_udp_relay_mode: ss-libev -> sslibev")
 else: print("WARNING: get_udp_relay_mode clash|tuic NOT found")
+
+# 10b. Add sslibev case in main udp_mode switch (like native but uses -U for REDIRECT)
+old2 = '\t\tsplit)\n\t\t\tmode="udp"'
+new2 = '\t\tsslibev)\n\t\t\tmode="tcp,udp"\n\t\t\ttcp_config_file=$TMP_PATH/tcp-udp-ssr-retcp.json\n\t\t\tARG_UDP="-U"\n\t\t\tARG_UDP_RULES=""\n\t\t\t;;\n\t\tsplit)\n\t\t\tmode="udp"'
+if old2 in content:
+	content = content.replace(old2, new2)
+	print("init: udp_mode sslibev case added (REDIRECT instead of TPROXY)")
+else: print("WARNING: udp_mode split NOT found")
 
 with open(init_path, 'w') as f:
     f.write(content)
