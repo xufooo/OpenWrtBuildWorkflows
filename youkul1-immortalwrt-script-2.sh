@@ -109,13 +109,13 @@ print("SSR Plus client-config.lua: done")
 #
 # Background: SSR Plus originally only supports ss-rust for shadowsocks.
 # ss-libev uses different binaries (ss-redir, ss-local) and a different UDP
-# proxy mechanism (REDIRECT) than ss-rust (TPROXY). This patch set adds
-# full ss-libev support including TCP transparent proxy, UDP REDIRECT,
+# proxy mechanism than ss-rust (TPROXY for both). This patch set adds
+# full ss-libev support including TCP transparent proxy, UDP TPROXY,
 # auto-detection, and persistence across reboots/table-reloads.
 #
 # Patches 1-5:   Type normalization - map ss-libev to internal "ss" type
 # Patches 6-9:   Binary routing - use ss-redir/ss-local instead of ss-rust
-# Patches 10-10c: UDP handling - REDIRECT-based UDP proxy with persistence
+# Patch 10:      UDP handling - TPROXY-based (reuses ss-rust native path)
 # =============================================================================
 init_path = f'{base}/root/etc/init.d/shadowsocksr'
 with open(init_path, 'r') as f:
@@ -249,31 +249,20 @@ if old in content:
 else: print("WARNING: Server binary selection NOT found")
 
 # =============================================================================
-# PATCHES 10-10c: UDP transparent proxy for ss-libev
+# PATCH 10: UDP TPROXY for ss-libev (no extra rules needed)
 #
-# CRITICAL: ss-libev uses REDIRECT for UDP, NOT TPROXY like ss-rust.
-# ss-rust needs ipt2socks + separate UDP listener for TPROXY. ss-libev
-# handles UDP natively via ss-redir -u - we just REDIRECT UDP packets to
-# the same ss-redir port (1234) that handles TCP. ssr-rules only knows
-# TPROXY, so we bypass its UDP handling and add REDIRECT rules manually.
+# ss-libev's ss-redir -u supports TPROXY natively via IP_TRANSPARENT (see
+# udprelay.c:528).  ssr-rules TPROXY=1 mode uses -s/-l for SERVER/LOCAL_PORT
+# which matches ss-redir's unified TCP+UDP listener on port 1234.
 #
-# Patch 10:  get_udp_relay_mode() returns "sslibev" (custom mode)
-# Patch 10b: sslibev case - redir_udp=0, ARG_UDP="", ARG_UDP_RULES="-y"
-#            (no TPROXY setup, no UDP block rules from ssr-rules)
-# Patch 10c: After ssr-rules, add nft REDIRECT for UDP + update persist
-#            file so rules survive reboots and table reloads
+# The existing ss-rust "native" path handles everything:
+#   type="ss" -> get_udp_relay_mode returns "native" -> ARG_UDP="-u"
+#   -> ssr-rules -u -> TPROXY=1 -> mangle TPROXY rules -> ss-redir port
+#   -> ss-redir receives via IP_TRANSPARENT
+#
+# No ipt2socks needed. No REDIRECT rules needed. Zero code changes.
 # =============================================================================
-	print("init: udp_mode sslibev case added (no TPROXY, REDIRECT handled separately)")
-else: print("WARNING: udp_mode split NOT found")
-
-
-
-old3 = '\t\treturn $?\n\t}'
-new3 = '\t\tlocal ret=$?\n\t\tif [ "$(uci_get_by_name $GLOBAL_SERVER type)" = "ss-libev" ]; then\n\t\t\tlocal ports="22,53,80,143,443,465,587,853,993,995,9418"\n\t\t\tnft list chain inet ss_spec ss_spec_wan_fw 2>/dev/null | grep -q 'udp.*redirect' || nft add rule inet ss_spec ss_spec_wan_fw meta l4proto udp udp dport { $ports } counter redirect to :$local_port 2>/dev/null\n\t\t\t# UDP server bypass (mirrors TCP bypass in wan_ac; ssr-rules guards this with [ -n "$server" ])\n\t\t\t[ -n "$server" ] && nft add rule inet ss_spec ss_spec_prerouting iifname "br-lan" meta l4proto udp udp dport != 53 ip daddr "$server" return 2>/dev/null\n\t\t\tnft list chain inet ss_spec ss_spec_prerouting 2>/dev/null | grep -q 'udp.*jump ss_spec_wan_ac' || nft add rule inet ss_spec ss_spec_prerouting iifname "br-lan" meta l4proto udp udp dport { $ports } jump ss_spec_wan_ac comment "_SS_SPEC_RULE_" 2>/dev/null\n\t\t# also handle OUTPUT chain for router-local DNS queries\n\t\tnft add rule inet ss_spec ss_spec_output meta l4proto udp udp dport { $ports } jump ss_spec_wan_ac comment "_SS_SPEC_RULE_" 2>/dev/null\n\t\t\tnft list table inet ss_spec > /usr/share/nftables.d/ruleset-post/99-shadowsocksr.nft 2>/dev/null\n\t\tfi\n\t\treturn $ret\n\t}'
-if old3 in content:
-	content = content.replace(old3, new3)
-	print("init: start_rules UDP REDIRECT for ss-libev added")
-else: print("WARNING: start_rules return not found")
+print("init: ss-libev UDP via TPROXY (native path, no extra rules needed)")
 
 with open(init_path, 'w') as f:
     f.write(content)
