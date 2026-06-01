@@ -245,7 +245,7 @@ else: print("WARNING: get_udp_relay_mode clash|tuic NOT found")
 
 # 10b. Add sslibev case in main udp_mode switch (no TPROXY, no UDP block; REDIRECT added separately)
 old2 = '\tsplit)\n\t\tmode="udp"'
-new2 = '\tsslibev)\n\t\tmode="tcp,udp"\n\t\ttcp_config_file=$TMP_PATH/tcp-udp-ssr-retcp.json\n\t\tARG_UDP=""\n\t\tARG_UDP_RULES="-y"\n\t\t;;\n\tsplit)\n\t\tmode="udp"'
+new2 = '\tsslibev)\n\t\tmode="tcp,udp"\n\t\ttcp_config_file=$TMP_PATH/tcp-udp-ssr-retcp.json\n\t\tredir_udp=0\n\t\tARG_UDP=""\n\t\tARG_UDP_RULES="-y"\n\t\t;;\n\tsplit)\n\t\tmode="udp"'
 if old2 in content:
 	content = content.replace(old2, new2)
 	print("init: udp_mode sslibev case added (no TPROXY, REDIRECT handled separately)")
@@ -254,7 +254,7 @@ else: print("WARNING: udp_mode split NOT found")
 # 10c. In start_rules(): after ssr-rules, add UDP REDIRECT for ss-libev
 #    Replace "return $?" (end of start_rules) with UDP REDIRECT nft rules + return
 old3 = '\t\treturn $?\n\t}'
-new3 = '\t\tlocal ret=$?\n\t\tif [ "$(uci_get_by_name $GLOBAL_SERVER type)" = "ss-libev" ]; then\n\t\t\tlocal ports="22,53,80,143,443,465,587,853,993,995,9418"\n\t\t\tnft add rule inet ss_spec ss_spec_wan_fw meta l4proto udp udp dport { $ports } counter redirect to :$local_port 2>/dev/null\n\t\t\t# UDP server bypass (mirrors TCP bypass in wan_ac; ssr-rules guards this with [ -n "$server" ])\n\t\t\t[ -n "$server" ] && nft add rule inet ss_spec ss_spec_prerouting iifname "br-lan" meta l4proto udp udp dport != 53 ip daddr "$server" return 2>/dev/null\n\t\t\tnft add rule inet ss_spec ss_spec_prerouting iifname "br-lan" meta l4proto udp udp dport { $ports } jump ss_spec_wan_ac comment "_SS_SPEC_RULE_" 2>/dev/null\n\t\t# also handle OUTPUT chain for router-local DNS queries\n\t\tnft add rule inet ss_spec ss_spec_output meta l4proto udp udp dport { $ports } jump ss_spec_wan_ac comment "_SS_SPEC_RULE_" 2>/dev/null\n\t\tfi\n\t\treturn $ret\n\t}'
+new3 = '\t\tlocal ret=$?\n\t\tif [ "$(uci_get_by_name $GLOBAL_SERVER type)" = "ss-libev" ]; then\n\t\t\tlocal ports="22,53,80,143,443,465,587,853,993,995,9418"\n\t\t\tnft list chain inet ss_spec ss_spec_wan_fw 2>/dev/null | grep -q 'udp.*redirect' || nft add rule inet ss_spec ss_spec_wan_fw meta l4proto udp udp dport { $ports } counter redirect to :$local_port 2>/dev/null\n\t\t\t# UDP server bypass (mirrors TCP bypass in wan_ac; ssr-rules guards this with [ -n "$server" ])\n\t\t\t[ -n "$server" ] && nft add rule inet ss_spec ss_spec_prerouting iifname "br-lan" meta l4proto udp udp dport != 53 ip daddr "$server" return 2>/dev/null\n\t\t\tnft list chain inet ss_spec ss_spec_prerouting 2>/dev/null | grep -q 'udp.*jump ss_spec_wan_ac' || nft add rule inet ss_spec ss_spec_prerouting iifname "br-lan" meta l4proto udp udp dport { $ports } jump ss_spec_wan_ac comment "_SS_SPEC_RULE_" 2>/dev/null\n\t\t# also handle OUTPUT chain for router-local DNS queries\n\t\tnft add rule inet ss_spec ss_spec_output meta l4proto udp udp dport { $ports } jump ss_spec_wan_ac comment "_SS_SPEC_RULE_" 2>/dev/null\n\t\tfi\n\t\treturn $ret\n\t}'
 if old3 in content:
 	content = content.replace(old3, new3)
 	print("init: start_rules UDP REDIRECT for ss-libev added")
