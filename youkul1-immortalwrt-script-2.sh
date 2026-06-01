@@ -124,6 +124,8 @@ with open(init_path, 'r') as f:
 # PATCH 1: Auto-detect ss-libev binaries at boot
 # Insert ss-redir+ss-local check BEFORE the existing sslocal->ss-rust fallback.
 # Without this, nodes default to ss-rust even when ss-libev binaries exist.
+old_detect = (
+    '\t\t\telif [ -n "$(first_type sslocal)" ]; then\n'
     '\t\t\t\tuci -q set "$NAME.$section.type=ss-rust"\n'
     '\t\t\t\tchanged=1'
 )
@@ -177,6 +179,7 @@ else: print("WARNING: Server normalization NOT found")
 
 # PATCH 6: UDP relay binary - use ss-redir for ss-libev
 # ss-libev UDP relay uses ss-redir directly (not sslocal-based like ss-rust).
+old_udp_bin = (
     '\t\t\telif [ "$udp_relay_server_type" = "ss-rust" ]'
     ' || [ "$udp_relay_server_type" = "ss" ]; then\n'
     '\t\t\t\tss_program="$(first_type ${type}local)"'
@@ -262,29 +265,75 @@ else: print("WARNING: Server binary selection NOT found")
 #
 # No ipt2socks needed. No REDIRECT rules needed. Zero code changes.
 # =============================================================================
-print("init: ss-libev UDP via TPROXY (native path, no extra rules needed)")
+old = '\t[ "$type" = "ss-rust" ] && type="ss"'
+new = '\tif [ "$type" = "ss-rust" ] || [ "$type" = "ss-libev" ]; then\n\t\ttype="ss"\n\tfi'
+if old in content:
+    content = content.replace(old, new)
+    print("init: get_udp_relay_mode: ss-libev -> native ss TPROXY")
+else:
+    print("WARNING: get_udp_relay_mode ss-rust normalization NOT found")
+
+# PATCH 11: Start ss-libev ss-redir with UDP enabled, without touching ssr-redir.
+old = (
+    '\t\t\tln_start_bin $ss_program ${type}-redir -c $tcp_config_file\n'
+    '\t\t\techolog "Main node:Shadowsocks-rust Started!"'
+)
+new = (
+    '\t\t\tif [ "$global_server_type" = "ss-libev" ]; then\n'
+    '\t\t\t\tln_start_bin $ss_program ${type}-redir -u -c $tcp_config_file\n'
+    '\t\t\t\techolog "Main node:Shadowsocks Libev Started!"\n'
+    '\t\t\telse\n'
+    '\t\t\t\tln_start_bin $ss_program ${type}-redir -c $tcp_config_file\n'
+    '\t\t\t\techolog "Main node:Shadowsocks-rust Started!"\n'
+    '\t\t\tfi'
+)
+if old in content:
+    content = content.replace(old, new)
+    print("init: ss-libev TCP/UDP start command patched")
+else:
+    print("WARNING: ss-libev start command block NOT found")
+
+# PATCH 12: Display ss-libev name for global SOCKS5 mode.
+old = (
+    '\t\t\tln_start_bin $ss_program ${type}-local -c $local_config_file\n'
+    '\t\t\techolog "Global_Socks5:Shadowsocks-rust Started!"'
+)
+new = (
+    '\t\t\tln_start_bin $ss_program ${type}-local -c $local_config_file\n'
+    '\t\t\tif [ "$local_server_type" = "ss-libev" ]; then\n'
+    '\t\t\t\techolog "Global_Socks5:Shadowsocks Libev Started!"\n'
+    '\t\t\telse\n'
+    '\t\t\t\techolog "Global_Socks5:Shadowsocks-rust Started!"\n'
+    '\t\t\tfi'
+)
+if old in content:
+    content = content.replace(old, new)
+    print("init: SOCKS display name patched for ss-libev")
+else:
+    print("WARNING: SOCKS display name block NOT found")
 
 with open(init_path, 'w') as f:
     f.write(content)
 print("SSR Plus init script: done")
-PYEOF
-
 
 # Patch gen_config.lua: handle ss-libev type
-sed -i 's/if server.type == "ss-rust" then/if server.type == "ss-rust" or server.type == "ss-libev" then/' feeds/smpackage/luci-app-ssr-plus/root/usr/share/shadowsocksr/gen_config.lua
-echo "gen_config.lua: ss-libev type mapping added"
+gen_config_path = f'{base}/root/usr/share/shadowsocksr/gen_config.lua'
+with open(gen_config_path, 'r') as f:
+    content = f.read()
 
+old = 'if server.type == "ss-rust" then'
+new = 'if server.type == "ss-rust" or server.type == "ss-libev" then'
+if old in content:
+    content = content.replace(old, new, 1)
+    print("gen_config.lua: ss-libev type mapping added")
+elif new in content:
+    print("gen_config.lua: ss-libev type mapping already present")
+else:
+    print("WARNING: gen_config.lua ss-rust type mapping NOT found")
 
-# Patch init script display: distinguish ss-libev from ss-rust
-sed -i '/echolog "Main node:Shadowsocks-rust Started!"/c\                        if [ "$global_server_type" = "ss-libev" ]; then\n                                echolog "Main node:Shadowsocks Libev Started!"\n                        else\n                                echolog "Main node:Shadowsocks-rust Started!"\n                        fi' feeds/smpackage/luci-app-ssr-plus/root/etc/init.d/shadowsocksr
-
-sed -i '/echolog "Global_Socks5:Shadowsocks-rust Started!"/c\                if [ "$local_server_type" = "ss-libev" ]; then\n                                echolog "Global_Socks5:Shadowsocks Libev Started!"\n                        else\n                                echolog "Global_Socks5:Shadowsocks-rust Started!"\n                        fi' feeds/smpackage/luci-app-ssr-plus/root/etc/init.d/shadowsocksr
-echo "init: display name patched (ss-libev)"
-
-# Add -u flag to TCP binary launch for ss-libev UDP support
-sed -i '/ln_start_bin \$ss_program \${type}-redir -c \$tcp_config_file/s/-c/-u -c/' feeds/smpackage/luci-app-ssr-plus/root/etc/init.d/shadowsocksr
-echo "init: -u flag added for ss-libev"
-
+with open(gen_config_path, 'w') as f:
+    f.write(content)
+PYEOF
 
 # Suppress AUTORELEASE deprecation warnings
 find feeds -name Makefile -exec sed -i -e 's/PKG_RELEASE:=$(AUTORELEASE)/PKG_RELEASE:=1/g' -e 's/PKG_RELEASE=$(AUTORELEASE)/PKG_RELEASE:=1/g' -e 's/PKG_RELEASE:=AUTORELEASE/PKG_RELEASE:=1/g' {} + 2>/dev/null || true
