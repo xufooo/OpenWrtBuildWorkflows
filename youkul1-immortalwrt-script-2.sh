@@ -111,16 +111,16 @@ with open(init_path, 'r') as f:
 
 # 1. Detection: add ss-redir+ss-local check BEFORE sslocal check
 old_detect = (
-    '\t\telif [ -n "$(first_type sslocal)" ]; then\n'
-    '\t\t\tuci -q set "$NAME.$section.type=ss-rust"\n'
-    '\t\t\tchanged=1'
+    '\t\t\telif [ -n "$(first_type sslocal)" ]; then\n'
+    '\t\t\t\tuci -q set "$NAME.$section.type=ss-rust"\n'
+    '\t\t\t\tchanged=1'
 )
 new_detect = (
-    '\t\telif [ -n "$(first_type ss-redir)" ] && [ -n "$(first_type ss-local)" ]; then\n'
-    '\t\t\t[ "$type" != "ss-libev" ] && { uci -q set "$NAME.$section.type=ss-libev"; changed=1; }\n'
-    '\t\telif [ -n "$(first_type sslocal)" ]; then\n'
-    '\t\t\tuci -q set "$NAME.$section.type=ss-rust"\n'
-    '\t\t\tchanged=1'
+    '\t\t\telif [ -n "$(first_type ss-redir)" ] && [ -n "$(first_type ss-local)" ]; then\n'
+    '\t\t\t\t[ "$type" != "ss-libev" ] && { uci -q set "$NAME.$section.type=ss-libev"; changed=1; }\n'
+    '\t\t\telif [ -n "$(first_type sslocal)" ]; then\n'
+    '\t\t\t\tuci -q set "$NAME.$section.type=ss-rust"\n'
+    '\t\t\t\tchanged=1'
 )
 if old_detect in content:
     content = content.replace(old_detect, new_detect)
