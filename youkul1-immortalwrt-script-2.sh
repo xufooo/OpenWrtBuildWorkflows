@@ -233,8 +233,9 @@ if old in content:
     print("init: Server binary selection patched")
 else: print("WARNING: Server binary selection NOT found")
 
-# 10. get_udp_relay_mode: add ss-libev with custom sslibev mode (UDP REDIRECT, not TPROXY)
-#    Insert ss-libev case before clash|tuic, echoing "sslibev"
+# 10. get_udp_relay_mode: add ss-libev with custom sslibev mode.
+# This keeps the main-branch magic route: ss-redir runs with -u, ssr-rules
+# does not create native UDP TPROXY rules, then start_rules adds nft REDIRECT.
 old = '\tclash|tuic)'
 new = '\tss-libev)\n\t\techo "sslibev"\n\t\t;;\n\tclash|tuic)'
 if old in content:
@@ -242,45 +243,93 @@ if old in content:
 	print("init: get_udp_relay_mode: ss-libev -> sslibev")
 else: print("WARNING: get_udp_relay_mode clash|tuic NOT found")
 
-
-# 10b. Add sslibev case in main udp_mode switch (no TPROXY, no UDP block; REDIRECT added separately)
+# 10b. Add sslibev case in main udp_mode switch.
 old2 = '\tsplit)\n\t\tmode="udp"'
 new2 = '\tsslibev)\n\t\tmode="tcp,udp"\n\t\ttcp_config_file=$TMP_PATH/tcp-udp-ssr-retcp.json\n\t\tredir_udp=0\n\t\tARG_UDP=""\n\t\tARG_UDP_RULES="-y"\n\t\t;;\n\tsplit)\n\t\tmode="udp"'
 if old2 in content:
 	content = content.replace(old2, new2)
-	print("init: udp_mode sslibev case added (no TPROXY, REDIRECT handled separately)")
+	print("init: udp_mode sslibev case added (manual UDP REDIRECT)")
 else: print("WARNING: udp_mode split NOT found")
 
-# 10c. In start_rules(): after ssr-rules, add UDP REDIRECT for ss-libev
-#    Replace "return $?" (end of start_rules) with UDP REDIRECT nft rules + return
+# 10c. In start_rules(): after ssr-rules, add UDP REDIRECT for ss-libev.
 old3 = '\t\treturn $?\n\t}'
-new3 = '\t\tlocal ret=$?\n\t\tif [ "$(uci_get_by_name $GLOBAL_SERVER type)" = "ss-libev" ]; then\n\t\t\tlocal ports="22,53,80,143,443,465,587,853,993,995,9418"\n\t\t\tnft list chain inet ss_spec ss_spec_wan_fw 2>/dev/null | grep -q 'udp.*redirect' || nft add rule inet ss_spec ss_spec_wan_fw meta l4proto udp udp dport { $ports } counter redirect to :$local_port 2>/dev/null\n\t\t\t# UDP server bypass (mirrors TCP bypass in wan_ac; ssr-rules guards this with [ -n "$server" ])\n\t\t\t[ -n "$server" ] && nft add rule inet ss_spec ss_spec_prerouting iifname "br-lan" meta l4proto udp udp dport != 53 ip daddr "$server" return 2>/dev/null\n\t\t\tnft list chain inet ss_spec ss_spec_prerouting 2>/dev/null | grep -q 'udp.*jump ss_spec_wan_ac' || nft add rule inet ss_spec ss_spec_prerouting iifname "br-lan" meta l4proto udp udp dport { $ports } jump ss_spec_wan_ac comment "_SS_SPEC_RULE_" 2>/dev/null\n\t\t# also handle OUTPUT chain for router-local DNS queries\n\t\tnft add rule inet ss_spec ss_spec_output meta l4proto udp udp dport { $ports } jump ss_spec_wan_ac comment "_SS_SPEC_RULE_" 2>/dev/null\n\t\t\tnft list table inet ss_spec > /usr/share/nftables.d/ruleset-post/99-shadowsocksr.nft 2>/dev/null\n\t\tfi\n\t\treturn $ret\n\t}'
+new3 = '''\t\tlocal ret=$?
+\t\tif [ "$(uci_get_by_name $GLOBAL_SERVER type)" = "ss-libev" ]; then
+\t\t\tlocal ports="22,53,80,143,443,465,587,853,993,995,9418"
+\t\t\tnft list chain inet ss_spec ss_spec_wan_fw 2>/dev/null | grep -q 'udp.*redirect' || nft add rule inet ss_spec ss_spec_wan_fw meta l4proto udp udp dport { $ports } counter redirect to :$local_port 2>/dev/null
+\t\t\t# UDP server bypass (mirrors TCP bypass in wan_ac; ssr-rules guards this with [ -n "$server" ])
+\t\t\t[ -n "$server" ] && nft add rule inet ss_spec ss_spec_prerouting iifname "br-lan" meta l4proto udp udp dport != 53 ip daddr "$server" return 2>/dev/null
+\t\t\tnft list chain inet ss_spec ss_spec_prerouting 2>/dev/null | grep -q 'udp.*jump ss_spec_wan_ac' || nft add rule inet ss_spec ss_spec_prerouting iifname "br-lan" meta l4proto udp udp dport { $ports } jump ss_spec_wan_ac comment "_SS_SPEC_RULE_" 2>/dev/null
+\t\t\t# also handle OUTPUT chain for router-local DNS queries
+\t\t\tnft add rule inet ss_spec ss_spec_output meta l4proto udp udp dport { $ports } jump ss_spec_wan_ac comment "_SS_SPEC_RULE_" 2>/dev/null
+\t\t\tnft list table inet ss_spec > /usr/share/nftables.d/ruleset-post/99-shadowsocksr.nft 2>/dev/null
+\t\tfi
+\t\treturn $ret
+\t}'''
 if old3 in content:
 	content = content.replace(old3, new3)
 	print("init: start_rules UDP REDIRECT for ss-libev added")
 else: print("WARNING: start_rules return not found")
 
+# 11. Start ss-libev ss-redir with UDP enabled, without touching ssr-redir.
+old = (
+    '\t\t\tln_start_bin $ss_program ${type}-redir -c $tcp_config_file\n'
+    '\t\t\techolog "Main node:Shadowsocks-rust Started!"'
+)
+new = (
+    '\t\t\tif [ "$global_server_type" = "ss-libev" ]; then\n'
+    '\t\t\t\tln_start_bin $ss_program ${type}-redir -u -c $tcp_config_file\n'
+    '\t\t\t\techolog "Main node:Shadowsocks Libev Started!"\n'
+    '\t\t\telse\n'
+    '\t\t\t\tln_start_bin $ss_program ${type}-redir -c $tcp_config_file\n'
+    '\t\t\t\techolog "Main node:Shadowsocks-rust Started!"\n'
+    '\t\t\tfi'
+)
+if old in content:
+    content = content.replace(old, new)
+    print("init: ss-libev TCP/UDP start command patched")
+else: print("WARNING: ss-libev start command block NOT found")
+
+# 12. Display ss-libev name for global SOCKS5 mode.
+old = (
+    '\t\t\tln_start_bin $ss_program ${type}-local -c $local_config_file\n'
+    '\t\t\techolog "Global_Socks5:Shadowsocks-rust Started!"'
+)
+new = (
+    '\t\t\tln_start_bin $ss_program ${type}-local -c $local_config_file\n'
+    '\t\t\tif [ "$local_server_type" = "ss-libev" ]; then\n'
+    '\t\t\t\techolog "Global_Socks5:Shadowsocks Libev Started!"\n'
+    '\t\t\telse\n'
+    '\t\t\t\techolog "Global_Socks5:Shadowsocks-rust Started!"\n'
+    '\t\t\tfi'
+)
+if old in content:
+    content = content.replace(old, new)
+    print("init: SOCKS display name patched for ss-libev")
+else: print("WARNING: SOCKS display name block NOT found")
+
 with open(init_path, 'w') as f:
     f.write(content)
 print("SSR Plus init script: done")
-PYEOF
-
 
 # Patch gen_config.lua: handle ss-libev type
-sed -i 's/if server.type == "ss-rust" then/if server.type == "ss-rust" or server.type == "ss-libev" then/' feeds/smpackage/luci-app-ssr-plus/root/usr/share/shadowsocksr/gen_config.lua
-echo "gen_config.lua: ss-libev type mapping added"
+gen_config_path = f'{base}/root/usr/share/shadowsocksr/gen_config.lua'
+with open(gen_config_path, 'r') as f:
+    content = f.read()
 
+old = 'if server.type == "ss-rust" then'
+new = 'if server.type == "ss-rust" or server.type == "ss-libev" then'
+if old in content:
+    content = content.replace(old, new, 1)
+    print("gen_config.lua: ss-libev type mapping added")
+elif new in content:
+    print("gen_config.lua: ss-libev type mapping already present")
+else:
+    print("WARNING: gen_config.lua ss-rust type mapping NOT found")
 
-# Patch init script display: distinguish ss-libev from ss-rust
-sed -i '/echolog "Main node:Shadowsocks-rust Started!"/c\                        if [ "$global_server_type" = "ss-libev" ]; then\n                                echolog "Main node:Shadowsocks Libev Started!"\n                        else\n                                echolog "Main node:Shadowsocks-rust Started!"\n                        fi' feeds/smpackage/luci-app-ssr-plus/root/etc/init.d/shadowsocksr
-
-sed -i '/echolog "Global_Socks5:Shadowsocks-rust Started!"/c\                if [ "$local_server_type" = "ss-libev" ]; then\n                                echolog "Global_Socks5:Shadowsocks Libev Started!"\n                        else\n                                echolog "Global_Socks5:Shadowsocks-rust Started!"\n                        fi' feeds/smpackage/luci-app-ssr-plus/root/etc/init.d/shadowsocksr
-echo "init: display name patched (ss-libev)"
-
-# Add -u flag to TCP binary launch for ss-libev UDP support
-sed -i '/ln_start_bin \$ss_program \${type}-redir -c \$tcp_config_file/s/-c/-u -c/' feeds/smpackage/luci-app-ssr-plus/root/etc/init.d/shadowsocksr
-echo "init: -u flag added for ss-libev"
-
+with open(gen_config_path, 'w') as f:
+    f.write(content)
+PYEOF
 
 # Suppress AUTORELEASE deprecation warnings
 find feeds -name Makefile -exec sed -i -e 's/PKG_RELEASE:=$(AUTORELEASE)/PKG_RELEASE:=1/g' -e 's/PKG_RELEASE=$(AUTORELEASE)/PKG_RELEASE:=1/g' -e 's/PKG_RELEASE:=AUTORELEASE/PKG_RELEASE:=1/g' {} + 2>/dev/null || true
