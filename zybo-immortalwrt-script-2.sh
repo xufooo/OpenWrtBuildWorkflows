@@ -19,12 +19,11 @@
 # Modify default IP
 sed -i 's/192.168.1.1/192.168.1.2/g' package/base-files/files/bin/config_generate
 
-# Modify AdGuardHome default configuration
-sed -i 's/\/var\/adguardhome/\/etc\/AdGuardHome/g' feeds/packages/net/adguardhome/files/adguardhome.config
-sed -i 's/adguardhome.yaml/AdGuardHome.yaml/g' feeds/packages/net/adguardhome/files/adguardhome.init
-
-# Fix mosdns conflict with luci-app-mosdns
+# Fix mosdns conflict with luci-app-mosdns (small-package vs official feed)
 cp feeds/smpackage/mosdns/Makefile feeds/packages/net/mosdns/Makefile
 
+# Use ImmortalWrt luci's adguardhome (lowercase, matching init), drop small-package's (uppercase mismatch)
+rm -rf feeds/smpackage/luci-app-adguardhome
+
 rm -rf feeds/packages/lang/golang
-git clone https://github.com/sbwml/packages_lang_golang -b 24.x feeds/packages/lang/golang
+git clone https://github.com/sbwml/packages_lang_golang -b 25.x feeds/packages/lang/golang

@@ -36,7 +36,7 @@ env:
   # other workflows.
   REPO_NAME: immortalwrt_zybo
   REPO_URL: https://github.com/immortalwrt/immortalwrt.git
-  REPO_BRANCH: v24.10.5
+  REPO_BRANCH: v25.12.0
   BUILD_DEPENDS:  "ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
   bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib \
   g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev \
@@ -239,9 +239,9 @@ jobs:
           echo "Build from $REPO_URL $REPO_BRANCH" >> release.txt
           [ $COWTRANSFER_FIRMWARE = true -o $WETRANSFER_FIRMWARE = true ] && echo 'Products transfer:' >> release.txt
           [ $COWTRANSFER_FIRMWARE = true ] && echo \
-            "ðŸ”— [Cowtransfer](${{ steps.cowtransfer.outputs.url }})" >> release.txt
+            "ðŸ”�?[Cowtransfer](${{ steps.cowtransfer.outputs.url }})" >> release.txt
           [ $WETRANSFER_FIRMWARE = true ] && echo \
-            "ðŸ”— [WeTransfer](${{ steps.wetransfer.outputs.url }})" >> release.txt
+            "ðŸ”�?[WeTransfer](${{ steps.wetransfer.outputs.url }})" >> release.txt
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: Upload firmware to release
