@@ -312,6 +312,23 @@ if old in content:
 else:
     print("WARNING: SOCKS display name block NOT found")
 
+# PATCH 13: Skip separate UDP relay start for ss-libev (ss-redir -u handles both).
+old = (
+    '\t\t\tln_start_bin $ss_program ${type}-redir -c $udp_config_file\n'
+    '\t\t\techolog "UDP TPROXY Relay:$(get_name $type) Started!"'
+)
+new = (
+    '\t\t\tif [ "$udp_relay_server_type" != "ss-libev" ]; then\n'
+    '\t\t\t\tln_start_bin $ss_program ${type}-redir -c $udp_config_file\n'
+    '\t\t\t\techolog "UDP TPROXY Relay:$(get_name $type) Started!"\n'
+    '\t\t\tfi'
+)
+if old in content:
+    content = content.replace(old, new)
+    print("init: ss-libev skip separate UDP relay start")
+else:
+    print("WARNING: UDP relay start block NOT found")
+
 with open(init_path, 'w') as f:
     f.write(content)
 print("SSR Plus init script: done")
