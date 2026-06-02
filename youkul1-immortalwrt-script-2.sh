@@ -327,7 +327,17 @@ if old in content:
     content = content.replace(old, new)
     print("init: ss-libev skip separate UDP relay start")
 else:
-    print("WARNING: UDP relay start block NOT found")
+        print("WARNING: UDP relay start block NOT found")
+
+# PATCH 14: Fix TPROXY UDP port for ss-libev (use TCP port, not tmp_udp_port 301).
+# ss-rust runs sslocal on port 301 for UDP; ss-libev's ss-redir -u handles both on same port.
+old = '\t\tlocal udp_local_port=$tmp_udp_port'
+new = '\t\tif [ "$(uci_get_by_name $GLOBAL_SERVER type)" = "ss-libev" ]; then\n\t\t\tlocal udp_local_port=$local_port\n\t\telse\n\t\t\tlocal udp_local_port=$tmp_udp_port\n\t\tfi'
+if old in content:
+    content = content.replace(old, new)
+    print("init: TPROXY UDP port fixed for ss-libev (shared port)")
+else:
+    print("WARNING: udp_local_port assignment NOT found")
 
 with open(init_path, 'w') as f:
     f.write(content)
