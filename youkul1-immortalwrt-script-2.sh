@@ -339,6 +339,22 @@ if old in content:
 else:
     print("WARNING: udp_local_port assignment NOT found")
 
+
+# PATCH 15: Early return in start_udp() for ss-libev.
+# ss-redir -u already handles TCP+UDP on the same port.  No separate UDP relay
+# process is needed (unlike ss-rust which runs a second sslocal for UDP).
+# This is a safety net: ss-libev normally takes the native path in Start_Run()
+# and start_udp() is never called.  If some edge case routes ss-libev through
+# the split path, this prevents gen_config_file + symlink deletion + a
+# doomed ln_start_bin call that would _exit(2) the whole script.
+# Must come after redir_udp=1 so start_rules() still adds UDP TPROXY rules.
+old = '\tredir_udp=1\n\tcase "$type" in'
+new = '\tredir_udp=1\n\t[ "$udp_relay_server_type" = "ss-libev" ] && return 0\n\tcase "$type" in'
+if old in content:
+    content = content.replace(old, new)
+    print("init: ss-libev early return in start_udp")
+else:
+    print("WARNING: start_udp redir_udp line NOT found")
 with open(init_path, 'w') as f:
     f.write(content)
 print("SSR Plus init script: done")
