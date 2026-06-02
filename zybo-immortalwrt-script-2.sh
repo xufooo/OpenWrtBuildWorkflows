@@ -27,4 +27,4 @@ sed -i 's/adguardhome.yaml/AdGuardHome.yaml/g' feeds/packages/net/adguardhome/fi
 cp feeds/smpackage/mosdns/Makefile feeds/packages/net/mosdns/Makefile
 
 rm -rf feeds/packages/lang/golang
-git clone https://github.com/sbwml/packages_lang_golang -b 25.x feeds/packages/lang/golang
+git clone https://github.com/sbwml/packages_lang_golang -b 24.x feeds/packages/lang/golang
