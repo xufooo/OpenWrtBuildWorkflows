@@ -239,9 +239,9 @@ jobs:
           echo "Build from $REPO_URL $REPO_BRANCH" >> release.txt
           [ $COWTRANSFER_FIRMWARE = true -o $WETRANSFER_FIRMWARE = true ] && echo 'Products transfer:' >> release.txt
           [ $COWTRANSFER_FIRMWARE = true ] && echo \
-            "ðŸ”�?[Cowtransfer](${{ steps.cowtransfer.outputs.url }})" >> release.txt
+            "冒鸥鈥濃€?[Cowtransfer](${{ steps.cowtransfer.outputs.url }})" >> release.txt
           [ $WETRANSFER_FIRMWARE = true ] && echo \
-            "ðŸ”�?[WeTransfer](${{ steps.wetransfer.outputs.url }})" >> release.txt
+            "冒鸥鈥濃€?[WeTransfer](${{ steps.wetransfer.outputs.url }})" >> release.txt
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: Upload firmware to release
