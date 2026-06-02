@@ -104,12 +104,26 @@ with open(f'{base}/luasrc/model/cbi/shadowsocksr/client-config.lua', 'w') as f:
     f.write(content)
 print("SSR Plus client-config.lua: done")
 
-# === Patch init script for native ss-libev binary routing ===
+# =============================================================================
+# PATCH SET: Enable ss-libev (shadowsocks-libev) as a native node type in SSR Plus
+#
+# Background: SSR Plus originally only supports ss-rust for shadowsocks.
+# ss-libev uses different binaries (ss-redir, ss-local) and a different UDP
+# proxy mechanism than ss-rust (TPROXY for both). This patch set adds
+# full ss-libev support including TCP transparent proxy, UDP TPROXY,
+# auto-detection, and persistence across reboots/table-reloads.
+#
+# Patches 1-5:   Type normalization - map ss-libev to internal "ss" type
+# Patches 6-9:   Binary routing - use ss-redir/ss-local instead of ss-rust
+# Patch 10:      UDP handling - TPROXY-based (reuses ss-rust native path)
+# =============================================================================
 init_path = f'{base}/root/etc/init.d/shadowsocksr'
 with open(init_path, 'r') as f:
     content = f.read()
 
-# 1. Detection: add ss-redir+ss-local check BEFORE sslocal check
+# PATCH 1: Auto-detect ss-libev binaries at boot
+# Insert ss-redir+ss-local check BEFORE the existing sslocal->ss-rust fallback.
+# Without this, nodes default to ss-rust even when ss-libev binaries exist.
 old_detect = (
     '\t\t\telif [ -n "$(first_type sslocal)" ]; then\n'
     '\t\t\t\tuci -q set "$NAME.$section.type=ss-rust"\n'
@@ -128,7 +142,10 @@ if old_detect in content:
 else:
     print("WARNING: detection block NOT found")
 
-# 2. UDP normalization
+# PATCH 2-5: Type normalization (ss-libev -> "ss")
+# SSR Plus internally normalizes ss-rust->"ss" for binary routing. Extend
+# each normalization point to also handle ss-libev->"ss", so ss-libev
+# nodes flow through the same code paths as ss-rust for TCP/SOCKS.
 old = '\tif [ "$udp_relay_server_type" = "ss-rust" ]; then\n\t\ttype="ss"\n\tfi'
 new = '\tif [ "$udp_relay_server_type" = "ss-rust" ] || [ "$udp_relay_server_type" = "ss-libev" ]; then\n\t\ttype="ss"\n\tfi'
 if old in content:
@@ -136,7 +153,7 @@ if old in content:
     print("init: UDP normalization patched")
 else: print("WARNING: UDP normalization NOT found")
 
-# 3. SOCKS normalization
+
 old = '\tif [ "$local_server_type" = "ss-rust" ]; then\n\t\ttype="ss"\n\tfi'
 new = '\tif [ "$local_server_type" = "ss-rust" ] || [ "$local_server_type" = "ss-libev" ]; then\n\t\ttype="ss"\n\tfi'
 if old in content:
@@ -144,7 +161,7 @@ if old in content:
     print("init: SOCKS normalization patched")
 else: print("WARNING: SOCKS normalization NOT found")
 
-# 4. TCP normalization
+
 old = '\tif [ "$global_server_type" = "ss-rust" ]; then\n\t\ttype="ss"\n\tfi'
 new = '\tif [ "$global_server_type" = "ss-rust" ] || [ "$global_server_type" = "ss-libev" ]; then\n\t\ttype="ss"\n\tfi'
 if old in content:
@@ -152,7 +169,7 @@ if old in content:
     print("init: TCP normalization patched")
 else: print("WARNING: TCP normalization NOT found")
 
-# 5. Server normalization
+
 old = '\t\t\tif [ "$node_type" = "ss-rust" ]; then\n\t\t\t\ttype="ss"\n\t\t\tfi'
 new = '\t\t\tif [ "$node_type" = "ss-rust" ] || [ "$node_type" = "ss-libev" ]; then\n\t\t\t\ttype="ss"\n\t\t\tfi'
 if old in content:
@@ -160,7 +177,8 @@ if old in content:
     print("init: Server normalization patched")
 else: print("WARNING: Server normalization NOT found")
 
-# 6. UDP binary: split ss-libev into own branch using ss-redir directly
+# PATCH 6: UDP relay binary - use ss-redir for ss-libev
+# ss-libev UDP relay uses ss-redir directly (not sslocal-based like ss-rust).
 old_udp_bin = (
     '\t\t\telif [ "$udp_relay_server_type" = "ss-rust" ]'
     ' || [ "$udp_relay_server_type" = "ss" ]; then\n'
@@ -178,7 +196,7 @@ if old_udp_bin in content:
     print("init: UDP binary split for ss-libev")
 else: print("WARNING: UDP binary block NOT found")
 
-# 7. TCP binary: use ss-redir when type is ss-libev
+# PATCH 7: TCP transparent proxy binary - use ss-redir for ss-libev
 old_tcp = (
     '\t\telse\n'
     '\t\t\tgen_config_file $GLOBAL_SERVER $type 1 $tcp_port\n'
@@ -198,7 +216,7 @@ if old_tcp in content:
     print("init: TCP binary patched for ss-libev")
 else: print("WARNING: TCP binary block NOT found")
 
-# 8. SOCKS binary: use ss-local when type is ss-libev
+# PATCH 8: SOCKS proxy binary - use ss-local for ss-libev
 old_socks = (
     '\t\telse\n'
     '\t\t\tgen_config_file $LOCAL_SERVER $type 4 $local_port\n'
@@ -218,7 +236,7 @@ if old_socks in content:
     print("init: SOCKS binary patched for ss-libev")
 else: print("WARNING: SOCKS binary block NOT found")
 
-# 9. Server binary selection
+# PATCH 9: Server-side binary selection includes ss-libev
 old = (
     '\t\t\t\t\telif [ "$node_type" = "ss-rust" ]'
     ' || [ "$node_type" = "ss" ]; then'
@@ -233,45 +251,29 @@ if old in content:
     print("init: Server binary selection patched")
 else: print("WARNING: Server binary selection NOT found")
 
-# 10. get_udp_relay_mode: add ss-libev with custom sslibev mode.
-# This keeps the main-branch magic route: ss-redir runs with -u, ssr-rules
-# does not create native UDP TPROXY rules, then start_rules adds nft REDIRECT.
-old = '\tclash|tuic)'
-new = '\tss-libev)\n\t\techo "sslibev"\n\t\t;;\n\tclash|tuic)'
+# =============================================================================
+# PATCH 10: UDP TPROXY for ss-libev (no extra rules needed)
+#
+# ss-libev's ss-redir -u supports TPROXY natively via IP_TRANSPARENT (see
+# udprelay.c:528).  ssr-rules TPROXY=1 mode uses -s/-l for SERVER/LOCAL_PORT
+# which matches ss-redir's unified TCP+UDP listener on port 1234.
+#
+# The existing ss-rust "native" path handles everything:
+#   type="ss" -> get_udp_relay_mode returns "native" -> ARG_UDP="-u"
+#   -> ssr-rules -u -> TPROXY=1 -> mangle TPROXY rules -> ss-redir port
+#   -> ss-redir receives via IP_TRANSPARENT
+#
+# No ipt2socks needed. No REDIRECT rules needed. Zero code changes.
+# =============================================================================
+old = '\t[ "$type" = "ss-rust" ] && type="ss"'
+new = '\tif [ "$type" = "ss-rust" ] || [ "$type" = "ss-libev" ]; then\n\t\ttype="ss"\n\tfi'
 if old in content:
-	content = content.replace(old, new)
-	print("init: get_udp_relay_mode: ss-libev -> sslibev")
-else: print("WARNING: get_udp_relay_mode clash|tuic NOT found")
+    content = content.replace(old, new)
+    print("init: get_udp_relay_mode: ss-libev -> native ss TPROXY")
+else:
+    print("WARNING: get_udp_relay_mode ss-rust normalization NOT found")
 
-# 10b. Add sslibev case in main udp_mode switch.
-old2 = '\tsplit)\n\t\tmode="udp"'
-new2 = '\tsslibev)\n\t\tmode="tcp,udp"\n\t\ttcp_config_file=$TMP_PATH/tcp-udp-ssr-retcp.json\n\t\tredir_udp=0\n\t\tARG_UDP=""\n\t\tARG_UDP_RULES="-y"\n\t\t;;\n\tsplit)\n\t\tmode="udp"'
-if old2 in content:
-	content = content.replace(old2, new2)
-	print("init: udp_mode sslibev case added (manual UDP REDIRECT)")
-else: print("WARNING: udp_mode split NOT found")
-
-# 10c. In start_rules(): after ssr-rules, add UDP REDIRECT for ss-libev.
-old3 = '\t\treturn $?\n\t}'
-new3 = '''\t\tlocal ret=$?
-\t\tif [ "$(uci_get_by_name $GLOBAL_SERVER type)" = "ss-libev" ]; then
-\t\t\tlocal ports="22,53,80,143,443,465,587,853,993,995,9418"
-\t\t\tnft list chain inet ss_spec ss_spec_wan_fw 2>/dev/null | grep -q 'udp.*redirect' || nft add rule inet ss_spec ss_spec_wan_fw meta l4proto udp udp dport { $ports } counter redirect to :$local_port 2>/dev/null
-\t\t\t# UDP server bypass (mirrors TCP bypass in wan_ac; ssr-rules guards this with [ -n "$server" ])
-\t\t\t[ -n "$server" ] && nft add rule inet ss_spec ss_spec_prerouting iifname "br-lan" meta l4proto udp udp dport != 53 ip daddr "$server" return 2>/dev/null
-\t\t\tnft list chain inet ss_spec ss_spec_prerouting 2>/dev/null | grep -q 'udp.*jump ss_spec_wan_ac' || nft add rule inet ss_spec ss_spec_prerouting iifname "br-lan" meta l4proto udp udp dport { $ports } jump ss_spec_wan_ac comment "_SS_SPEC_RULE_" 2>/dev/null
-\t\t\t# also handle OUTPUT chain for router-local DNS queries
-\t\t\tnft add rule inet ss_spec ss_spec_output meta l4proto udp udp dport { $ports } jump ss_spec_wan_ac comment "_SS_SPEC_RULE_" 2>/dev/null
-\t\t\tnft list table inet ss_spec > /usr/share/nftables.d/ruleset-post/99-shadowsocksr.nft 2>/dev/null
-\t\tfi
-\t\treturn $ret
-\t}'''
-if old3 in content:
-	content = content.replace(old3, new3)
-	print("init: start_rules UDP REDIRECT for ss-libev added")
-else: print("WARNING: start_rules return not found")
-
-# 11. Start ss-libev ss-redir with UDP enabled, without touching ssr-redir.
+# PATCH 11: Start ss-libev ss-redir with UDP enabled, without touching ssr-redir.
 old = (
     '\t\t\tln_start_bin $ss_program ${type}-redir -c $tcp_config_file\n'
     '\t\t\techolog "Main node:Shadowsocks-rust Started!"'
@@ -288,9 +290,10 @@ new = (
 if old in content:
     content = content.replace(old, new)
     print("init: ss-libev TCP/UDP start command patched")
-else: print("WARNING: ss-libev start command block NOT found")
+else:
+    print("WARNING: ss-libev start command block NOT found")
 
-# 12. Display ss-libev name for global SOCKS5 mode.
+# PATCH 12: Display ss-libev name for global SOCKS5 mode.
 old = (
     '\t\t\tln_start_bin $ss_program ${type}-local -c $local_config_file\n'
     '\t\t\techolog "Global_Socks5:Shadowsocks-rust Started!"'
@@ -306,8 +309,52 @@ new = (
 if old in content:
     content = content.replace(old, new)
     print("init: SOCKS display name patched for ss-libev")
-else: print("WARNING: SOCKS display name block NOT found")
+else:
+    print("WARNING: SOCKS display name block NOT found")
 
+# PATCH 13: Skip separate UDP relay start for ss-libev (ss-redir -u handles both).
+old = (
+    '\t\t\tln_start_bin $ss_program ${type}-redir -c $udp_config_file\n'
+    '\t\t\techolog "UDP TPROXY Relay:$(get_name $type) Started!"'
+)
+new = (
+    '\t\t\tif [ "$udp_relay_server_type" != "ss-libev" ]; then\n'
+    '\t\t\t\tln_start_bin $ss_program ${type}-redir -c $udp_config_file\n'
+    '\t\t\t\techolog "UDP TPROXY Relay:$(get_name $type) Started!"\n'
+    '\t\t\tfi'
+)
+if old in content:
+    content = content.replace(old, new)
+    print("init: ss-libev skip separate UDP relay start")
+else:
+    print("WARNING: UDP relay start block NOT found")
+
+# PATCH 14: Fix TPROXY UDP port for ss-libev (use TCP port, not tmp_udp_port 301).
+# ss-rust runs sslocal on port 301 for UDP; ss-libev's ss-redir -u handles both on same port.
+old = '\t\tlocal udp_local_port=$tmp_udp_port'
+new = '\t\tif [ "$(uci_get_by_name $GLOBAL_SERVER type)" = "ss-libev" ]; then\n\t\t\tlocal udp_local_port=$local_port\n\t\telse\n\t\t\tlocal udp_local_port=$tmp_udp_port\n\t\tfi'
+if old in content:
+    content = content.replace(old, new)
+    print("init: TPROXY UDP port fixed for ss-libev (shared port)")
+else:
+    print("WARNING: udp_local_port assignment NOT found")
+
+
+# PATCH 15: Early return in start_udp() for ss-libev.
+# ss-redir -u already handles TCP+UDP on the same port.  No separate UDP relay
+# process is needed (unlike ss-rust which runs a second sslocal for UDP).
+# This is a safety net: ss-libev normally takes the native path in Start_Run()
+# and start_udp() is never called.  If some edge case routes ss-libev through
+# the split path, this prevents gen_config_file + symlink deletion + a
+# doomed ln_start_bin call that would _exit(2) the whole script.
+# Must come after redir_udp=1 so start_rules() still adds UDP TPROXY rules.
+old = '\tredir_udp=1\n\tcase "$type" in'
+new = '\tredir_udp=1\n\t[ "$udp_relay_server_type" = "ss-libev" ] && return 0\n\tcase "$type" in'
+if old in content:
+    content = content.replace(old, new)
+    print("init: ss-libev early return in start_udp")
+else:
+    print("WARNING: start_udp redir_udp line NOT found")
 with open(init_path, 'w') as f:
     f.write(content)
 print("SSR Plus init script: done")
