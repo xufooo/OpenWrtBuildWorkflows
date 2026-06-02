@@ -26,4 +26,4 @@ cp feeds/smpackage/mosdns/Makefile feeds/packages/net/mosdns/Makefile
 rm -rf feeds/smpackage/luci-app-adguardhome
 
 rm -rf feeds/packages/lang/golang
-git clone https://github.com/sbwml/packages_lang_golang -b 25.x feeds/packages/lang/golang
+git clone https://github.com/sbwml/packages_lang_golang -b 26.x feeds/packages/lang/golang
