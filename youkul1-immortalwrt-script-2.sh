@@ -170,9 +170,9 @@ if old in content:
 else:
     errors.append("P4 SOCKS5 normal.")
 
-# P5: get_udp_relay_mode normalization
+# P5: get_udp_relay_mode normalization (uses if/then/fi to avoid ||/&& precedence bug)
 old = '\t[ "$type" = "ss-rust" ] && type="ss"'
-new = '\t[ "$type" = "ss-rust" ] || [ "$type" = "ss-libev" ] && type="ss"'
+new = '\tif [ "$type" = "ss-rust" ] || [ "$type" = "ss-libev" ]; then\n\t\ttype="ss"\n\tfi'
 if old in content:
     content = content.replace(old, new)
     print("P5 get_udp_relay_mode: OK")
