@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 # Copyright (c) 2022-2023 Curious <https://www.curious.host>
 #
 # This is free software, licensed under the MIT License.
@@ -53,6 +53,7 @@ new_dep = (
     '+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client:shadowsocks-libev-config \\\n'
     '\t+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client:shadowsocks-libev-ss-local \\\n'
     '\t+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client:shadowsocks-libev-ss-redir \\\n'
+    '\t+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client:shadowsocks-libev-ss-server \\\n'
     '\t+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Client:shadowsocks-rust-sslocal \\'
 )
 content = content.replace(old_dep, new_dep)
@@ -135,7 +136,7 @@ with open(subscribe_path, 'r') as f:
 # Add has_ss_libev detection after has_ss_rust
 content = content.replace(
     'local has_ss_rust = luci.sys.exec(\'type -t -p sslocal 2>/dev/null || type -t -p ssserver 2>/dev/null\') ~= ""',
-    'local has_ss_rust = luci.sys.exec(\'type -t -p sslocal 2>/dev/null || type -t -p ssserver 2>/dev/null\') ~= ""\nlocal has_ss_libev = luci.sys.exec(\'type -t -p ss-redir 2>/dev/null || type -t -p ss-local 2>/dev/null\') ~= ""'
+    'local has_ss_rust = luci.sys.exec(\'type -t -p sslocal 2>/dev/null || type -t -p ssserver 2>/dev/null\') ~= ""\nlocal has_ss_libev = luci.sys.exec(\'type -t -p ss-redir 2>/dev/null || type -t -p ss-local 2>/dev/null || type -t -p ss-server 2>/dev/null\') ~= ""'
 )
 
 # Add ss-libev to preferred_ss_backend() after ss-rust block
@@ -310,13 +311,30 @@ else:
     errors.append("P8 SOCKS5 binary")
 
 
+# P9: Server mode — ss-libev normalization + ss-server binary
+old_p9a = '\t\t\tif [ "$node_type" = "ss-rust" ]; then\n\t\t\t\ttype="ss"\n\t\t\tfi'
+new_p9a = '\t\t\tif [ "$node_type" = "ss-rust" ] || [ "$node_type" = "ss-libev" ]; then\n\t\t\t\ttype="ss"\n\t\t\tfi'
+if old_p9a in content:
+    content = content.replace(old_p9a, new_p9a)
+    print("P9a server norm.: OK")
+else:
+    errors.append("P9a server norm.")
+
+old_p9b = '\t\t\t\t\telif [ "$node_type" = "ss-rust" ] || [ "$node_type" = "ss" ]; then\n\t\t\t\t\t\tss_program="$(first_type ${type}server)"'
+new_p9b = '\t\t\t\t\telif [ "$node_type" = "ss-libev" ]; then\n\t\t\t\t\t\tss_program="$(first_type ss-server)"\n\t\t\t\t\telif [ "$node_type" = "ss-rust" ] || [ "$node_type" = "ss" ]; then\n\t\t\t\t\t\tss_program="$(first_type ${type}server)"'
+if old_p9b in content:
+    content = content.replace(old_p9b, new_p9b)
+    print("P9b server binary: OK")
+else:
+    errors.append("P9b server binary")
+
 if errors:
     print(f"\nERRORS ({len(errors)}): {', '.join(errors)}")
     sys.exit(1)
 
 with open(init_path, 'w') as f:
     f.write(content)
-print("\nAll 8 init patches applied successfully")
+print("\nAll 10 init patches applied successfully")
 
 with open(init_path, 'r') as f:
     final = f.read()
