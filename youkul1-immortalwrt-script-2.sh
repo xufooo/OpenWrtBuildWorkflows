@@ -126,6 +126,43 @@ with open(gen_config_path, 'w') as f:
     f.write(content)
 
 # =============================================================================
+# LuCI subscribe.lua: add ss-libev to preferred_ss_backend() for subscription import
+# =============================================================================
+subscribe_path = f'{base}/root/usr/share/shadowsocksr/subscribe.lua'
+with open(subscribe_path, 'r') as f:
+    content = f.read()
+
+# Add has_ss_libev detection after has_ss_rust
+content = content.replace(
+    'local has_ss_rust = luci.sys.exec(\'type -t -p sslocal 2>/dev/null || type -t -p ssserver 2>/dev/null\') ~= ""',
+    'local has_ss_rust = luci.sys.exec(\'type -t -p sslocal 2>/dev/null || type -t -p ssserver 2>/dev/null\') ~= ""\nlocal has_ss_libev = luci.sys.exec(\'type -t -p ss-redir 2>/dev/null || type -t -p ss-local 2>/dev/null\') ~= ""'
+)
+
+# Add ss-libev to preferred_ss_backend() after ss-rust block
+old_func = (
+    '\tif has_ss_rust then\n'
+    '\t\treturn "ss-rust"\n'
+    '\tend\n'
+    '\tif has_xray then'
+)
+new_func = (
+    '\tif has_ss_rust then\n'
+    '\t\treturn "ss-rust"\n'
+    '\tend\n'
+    '\tif has_ss_libev then\n'
+    '\t\treturn "ss-libev"\n'
+    '\tend\n'
+    '\tif has_xray then'
+)
+if old_func in content:
+    content = content.replace(old_func, new_func)
+    print("subscribe.lua: ss-libev backend added")
+else:
+    print("WARNING: preferred_ss_backend block NOT found in subscribe.lua")
+
+with open(subscribe_path, 'w') as f:
+    f.write(content)
+# =============================================================================
 # Init script patches
 # =============================================================================
 init_path = f'{base}/root/etc/init.d/shadowsocksr'
