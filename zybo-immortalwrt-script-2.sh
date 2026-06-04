@@ -19,8 +19,9 @@
 # Modify default IP
 sed -i 's/192.168.1.1/192.168.1.2/g' package/base-files/files/bin/config_generate
 
-# Fix mosdns conflict with luci-app-mosdns (small-package vs official feed)
-cp feeds/smpackage/mosdns/Makefile feeds/packages/net/mosdns/Makefile
+# Replace official mosdns with smpackage's full package (Makefile + patches for adblock_set support)
+rm -rf feeds/packages/net/mosdns
+cp -r feeds/smpackage/mosdns feeds/packages/net/mosdns
 
 # Use ImmortalWrt luci's adguardhome (lowercase, matching init), drop small-package's (uppercase mismatch)
 rm -rf feeds/smpackage/luci-app-adguardhome
@@ -28,8 +29,6 @@ rm -rf feeds/smpackage/luci-app-adguardhome
 rm -rf feeds/packages/lang/golang
 git clone https://github.com/sbwml/packages_lang_golang -b 26.x feeds/packages/lang/golang
 
-# Fix mosdns init: mosdns v5 dropped adblock_set, must use domain_set
-grep -q '"adblock_set"' feeds/smpackage/luci-app-mosdns/root/etc/init.d/mosdns && sed -i 's/"adblock_set"/"domain_set"/g' feeds/smpackage/luci-app-mosdns/root/etc/init.d/mosdns || echo 'mosdns init: adblock_set already fixed upstream, skip'
 
 # Fix smartdns LuCI: Promise.all wrapper makes array always truthy -> always shows RUNNING
 grep -q 'Promise.all([getServiceStatus()])' feeds/luci/applications/luci-app-smartdns/htdocs/luci-static/resources/view/smartdns/smartdns.js && sed -i 's/return Promise.all([getServiceStatus()]);/return getServiceStatus();/' feeds/luci/applications/luci-app-smartdns/htdocs/luci-static/resources/view/smartdns/smartdns.js || echo 'smartdns LuCI: Promise.all already fixed upstream, skip'
