@@ -27,3 +27,9 @@ rm -rf feeds/smpackage/luci-app-adguardhome
 
 rm -rf feeds/packages/lang/golang
 git clone https://github.com/sbwml/packages_lang_golang -b 26.x feeds/packages/lang/golang
+
+# Fix mosdns init: mosdns v5 dropped adblock_set, must use domain_set
+sed -i 's/"adblock_set"/"domain_set"/g' feeds/smpackage/luci-app-mosdns/root/etc/init.d/mosdns
+
+# Fix smartdns LuCI: Promise.all wrapper makes array always truthy -> always shows RUNNING
+sed -i 's/return Promise.all(\[getServiceStatus()\]);/return getServiceStatus();/' feeds/luci/applications/luci-app-smartdns/htdocs/luci-static/resources/view/smartdns/smartdns.js
