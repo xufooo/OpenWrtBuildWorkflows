@@ -187,6 +187,25 @@ if old_block in content:
 else:
     print("WARNING: server-config.lua ss block NOT found")
 
+# Add ss-libev to depends for ss-specific options (timeout, password, encrypt_method_ss, fast_open)
+depends_fixes = [
+    # timeout: ss + ssr -> ss + ss-libev + ssr
+    ('o:depends("type", "ss")\no:depends("type", "ssr")',
+     'o:depends("type", "ss")\no:depends("type", "ss-libev")\no:depends("type", "ssr")'),
+    # password: socks5 + ss + ssr -> socks5 + ss + ss-libev + ssr
+    ('o:depends("type", "socks5")\no:depends("type", "ss")\no:depends("type", "ssr")',
+     'o:depends("type", "socks5")\no:depends("type", "ss")\no:depends("type", "ss-libev")\no:depends("type", "ssr")'),
+    # encrypt_method_ss: ss only -> ss + ss-libev
+    ('o:depends("type", "ss")\n',
+     'o:depends("type", "ss")\no:depends("type", "ss-libev")\n'),
+]
+for old_dep, new_dep in depends_fixes:
+    if old_dep in content:
+        content = content.replace(old_dep, new_dep)
+        print("server-config.lua: added ss-libev depends")
+    else:
+        print("WARNING: depends block NOT found: " + old_dep[:60])
+
 with open(server_config_path, 'w') as f:
     f.write(content)
 
