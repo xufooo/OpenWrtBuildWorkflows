@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 # Copyright (c) 2022-2023 Curious <https://www.curious.host>
 #
 # This is free software, licensed under the MIT License.
@@ -172,6 +172,25 @@ else:
 with open(subscribe_path, 'w') as f:
     f.write(content)
 # =============================================================================
+# LuCI server-config.lua: add ss-libev server type detection
+# =============================================================================
+server_config_path = f'{base}/luasrc/model/cbi/shadowsocksr/server-config.lua'
+with open(server_config_path, 'r') as f:
+    content = f.read()
+
+# Add ss-libev server type option when ss-server binary exists
+old_block = 'if nixio.fs.access("/usr/bin/mihomo") or nixio.fs.access("/usr/libexec/mihomo") or nixio.fs.access("/usr/bin/ssserver") or nixio.fs.access("/usr/libexec/ssserver") then\n\to:value("ss", translate("ShadowSocks"))\nend'
+new_block = 'if nixio.fs.access("/usr/bin/mihomo") or nixio.fs.access("/usr/libexec/mihomo") or nixio.fs.access("/usr/bin/ssserver") or nixio.fs.access("/usr/libexec/ssserver") then\n\to:value("ss", translate("ShadowSocks"))\nend\nif nixio.fs.access("/usr/bin/ss-server") or nixio.fs.access("/usr/libexec/ss-server") then\n\to:value("ss-libev", translate("ShadowSocks Libev"))\nend'
+if old_block in content:
+    content = content.replace(old_block, new_block)
+    print("server-config.lua: added ss-libev server type option")
+else:
+    print("WARNING: server-config.lua ss block NOT found")
+
+with open(server_config_path, 'w') as f:
+    f.write(content)
+
+# =============================================================================
 # Init script patches
 # =============================================================================
 init_path = f'{base}/root/etc/init.d/shadowsocksr'
@@ -189,7 +208,7 @@ if old in content:
 else:
     errors.append("P1 migration stop")
 
-# P2: supports_builtin_socks() — add ss-libev
+# P2: supports_builtin_socks() �� add ss-libev
 old = '\tss|clash|tuic|v2ray)'
 new = '\tss|ss-libev|clash|tuic|v2ray)'
 if old in content:
@@ -234,7 +253,7 @@ if old in content:
 else:
     errors.append("P6 Start_Run normal.")
 
-# P7: Core Start_Run — ss-redir -u for ss-libev
+# P7: Core Start_Run �� ss-redir -u for ss-libev
 old_tcp = (
     '\t\telse\n'
     '\t\t\tgen_config_file $GLOBAL_SERVER $type 1 $tcp_port\n'
@@ -276,7 +295,7 @@ if old_tcp in content:
 else:
     errors.append("P7 core start TCP")
 
-# P8: SOCKS5 — ss-local for ss-libev
+# P8: SOCKS5 �� ss-local for ss-libev
 old_socks = (
     '\t\telse\n'
     '\t\t\tgen_config_file $LOCAL_SERVER $type 4 $local_port\n'
@@ -319,7 +338,7 @@ else:
     errors.append("P8 SOCKS5 binary")
 
 
-# P9: Server mode — ss-libev normalization + ss-server binary
+# P9: Server mode �� ss-libev normalization + ss-server binary
 old_p9a = '\t\t\tif [ "$node_type" = "ss-rust" ]; then\n\t\t\t\ttype="ss"\n\t\t\tfi'
 new_p9a = '\t\t\tif [ "$node_type" = "ss-rust" ] || [ "$node_type" = "ss-libev" ]; then\n\t\t\t\ttype="ss"\n\t\t\tfi'
 if old_p9a in content:
