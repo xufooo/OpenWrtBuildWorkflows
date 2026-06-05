@@ -19,9 +19,12 @@
 # Modify default IP
 sed -i 's/192.168.1.1/192.168.1.2/g' package/base-files/files/bin/config_generate
 
-# Replace official mosdns with smpackage's full package (Makefile + patches for adblock_set support)
+# Replace official mosdns with sbwml's fork (Makefile + full patches incl. adblock_set)
+# sbwml/luci-app-mosdns v5 branch > mosdns/ has 7 patches vs smpackage's 3
 rm -rf feeds/packages/net/mosdns
-cp -r feeds/smpackage/mosdns feeds/packages/net/mosdns
+git clone --depth 1 -b v5 https://github.com/sbwml/luci-app-mosdns.git /tmp/sbwml-mosdns-clone 2>/dev/null
+cp -r /tmp/sbwml-mosdns-clone/mosdns feeds/packages/net/mosdns
+rm -rf /tmp/sbwml-mosdns-clone
 
 # Use ImmortalWrt luci's adguardhome (lowercase, matching init), drop small-package's (uppercase mismatch)
 rm -rf feeds/smpackage/luci-app-adguardhome
