@@ -10,8 +10,8 @@ define Package/shadowsocks-libev-config
 endef
 
 define Package/shadowsocks-libev-config/install
-\t$(INSTALL_DIR) $(1)/etc/config
-\t$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_DIR) $(1)/etc/config
+	$(INSTALL_DIR) $(1)/etc/init.d
 endef
 
 $(eval $(call BuildPackage,shadowsocks-libev-config))
