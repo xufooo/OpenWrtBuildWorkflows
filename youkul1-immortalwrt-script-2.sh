@@ -1,6 +1,28 @@
 #!/bin/bash
-base="feeds/smpackage/luci-app-ssr-plus"
+
+# --- shadowsocks-libev: config stub (required by SSR Plus depends) ---
+cd feeds/smpackage/shadowsocks-libev
+cat >> Makefile << 'EOF'
+
+define Package/shadowsocks-libev-config
+  $(call Package/shadowsocks-libev/Default)
+  TITLE:=shadowsocks-libev config
+endef
+
+define Package/shadowsocks-libev-config/install
+\t$(INSTALL_DIR) $(1)/etc/config
+\t$(INSTALL_DIR) $(1)/etc/init.d
+endef
+
+$(eval $(call BuildPackage,shadowsocks-libev-config))
+EOF
+cd ../../..
+
 python3 << 'PYEOF'
+import sys
+
+base = 'feeds/smpackage/luci-app-ssr-plus'
+
 # =============================================================================
 # Makefile: Kconfig + package depends
 # =============================================================================
