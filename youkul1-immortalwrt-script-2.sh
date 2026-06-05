@@ -391,5 +391,74 @@ else:
     print("Sanity check: no double-patch detected")
 PYEOF
 
+
+# =============================================================================
+# ssr-rules: fix duplicate daemon instances (DAEMON_ID + PID tracking)
+# Bug: ()& subshell writes $ (parent PID) to pid_file instead of real PID,
+#      and old daemons survive restarts because nothing tracks them.
+# =============================================================================
+rules_path="feeds/smpackage/luci-app-ssr-plus/root/usr/bin/ssr-rules"
+if [ -f "$rules_path" ]; then
+    python3 << 'PYRULES'
+import sys
+rules_path = "feeds/smpackage/luci-app-ssr-plus/root/usr/bin/ssr-rules"
+with open(rules_path, 'r') as f:
+    rcontent = f.read()
+
+errors = []
+
+# P10: Add DAEMON_ID tracking to prevent duplicate daemons
+old_r = (
+    '\t# Stop already running daemon\n'
+    '\tstop_auto_update_daemon\n'
+    '\n'
+    '\t# Start daemon directly in background\n'
+    '\t(\n'
+    '\t\tlogger -t ssr-rules[daemon] "Auto-update daemon started - PID: $"\n'
+    '\t\techo $ > "/var/run/ssr-rules-daemon.pid"\n'
+    '\n'
+    '\t\twhile true; do\n'
+    '\t\t\tsleep "$AUTO_UPDATE_INTERVAL"'
+)
+new_r = (
+    '\t# Stop already running daemon\n'
+    '\tstop_auto_update_daemon\n'
+    '\n'
+    '\tDAEMON_ID="$-$(date +%s)"\n'
+    '\n'
+    '\t# Start daemon directly in background\n'
+    '\t(\n'
+    '\t\techo "$DAEMON_ID" > "/var/run/ssr-rules-daemon.id"\n'
+    '\t\tlogger -t ssr-rules[daemon] "Auto-update daemon started - PID: $"\n'
+    '\n'
+    '\t\twhile true; do\n'
+    '\t\t\t[ "$(cat /var/run/ssr-rules-daemon.id 2>/dev/null)" = "$DAEMON_ID" ] || exit 0\n'
+    '\t\t\tsleep "$AUTO_UPDATE_INTERVAL"'
+)
+if old_r in rcontent:
+    rcontent = rcontent.replace(old_r, new_r)
+    print("P10 ssr-rules DAEMON_ID: OK")
+else:
+    errors.append("P10 ssr-rules DAEMON_ID")
+
+# P11: Write real background PID (not shell $) to pid file
+old_pid = '\t) &\n\n\tlocal DAEMON_PID=$!\n\tsleep 2'
+new_pid = '\t) &\n\n\tlocal DAEMON_PID=$!\n\techo "$DAEMON_PID" > "/var/run/ssr-rules-daemon.pid"\n\tsleep 2'
+if old_pid in rcontent:
+    rcontent = rcontent.replace(old_pid, new_pid)
+    print("P11 ssr-rules PID fix: OK")
+else:
+    errors.append("P11 ssr-rules PID fix")
+
+if errors:
+    print(f"ssr-rules ERRORS ({len(errors)}): {', '.join(errors)}")
+    sys.exit(1)
+
+with open(rules_path, 'w') as f:
+    f.write(rcontent)
+print("ssr-rules patches applied successfully")
+PYRULES
+fi
+
 # Suppress AUTORELEASE deprecation warnings
 find feeds -name Makefile -exec sed -i -e 's/PKG_RELEASE:=$(AUTORELEASE)/PKG_RELEASE:=1/g' -e 's/PKG_RELEASE=$(AUTORELEASE)/PKG_RELEASE:=1/g' -e 's/PKG_RELEASE:=AUTORELEASE/PKG_RELEASE:=1/g' {} + 2>/dev/null || true
