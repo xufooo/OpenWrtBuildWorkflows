@@ -37,4 +37,4 @@ git clone https://github.com/sbwml/packages_lang_golang -b 26.x feeds/packages/l
 
 
 # Fix smartdns LuCI: Promise.all wrapper makes array always truthy -> always shows RUNNING
-grep -q 'Promise.all([getServiceStatus()])' feeds/luci/applications/luci-app-smartdns/htdocs/luci-static/resources/view/smartdns/smartdns.js && sed -i 's/return Promise.all([getServiceStatus()]);/return getServiceStatus();/' feeds/luci/applications/luci-app-smartdns/htdocs/luci-static/resources/view/smartdns/smartdns.js || echo 'smartdns LuCI: Promise.all already fixed upstream, skip'
+grep -Fq 'Promise.all([getServiceStatus()])' feeds/luci/applications/luci-app-smartdns/htdocs/luci-static/resources/view/smartdns/smartdns.js && sed -i 's/return Promise.all([getServiceStatus()]);/return getServiceStatus();/' feeds/luci/applications/luci-app-smartdns/htdocs/luci-static/resources/view/smartdns/smartdns.js || echo 'smartdns LuCI: Promise.all already fixed upstream, skip'
