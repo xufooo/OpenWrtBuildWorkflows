@@ -1,7 +1,19 @@
 #!/bin/bash
+# Copyright (c) 2022-2023 Curious <https://www.curious.host>
+#
+# This is free software, licensed under the MIT License.
+# See /LICENSE for more information.
+#
+# https://github.com/Curious-r/OpenWrtBuildWorkflows
+#-------------------------------------------------------------------------------------------------------
+#
+# 1. Add stub shadowsocks-libev-config package
+# 2. Patch SSR Plus: Makefile Kconfig + client-config.lua type dropdown + init script
+#    Supports ss-libev as native node type alongside ss-rust.
 
-# --- shadowsocks-libev: config stub (required by SSR Plus depends) ---
+# --- shadowsocks-libev: config stub ---
 cd feeds/smpackage/shadowsocks-libev
+
 cat >> Makefile << 'EOF'
 
 define Package/shadowsocks-libev-config
@@ -16,10 +28,12 @@ endef
 
 $(eval $(call BuildPackage,shadowsocks-libev-config))
 EOF
+
 cd ../../..
 
+# --- SSR Plus: Makefile + client-config.lua + init script patches ---
 python3 << 'PYEOF'
-import sys
+import sys, os
 
 base = 'feeds/smpackage/luci-app-ssr-plus'
 
@@ -28,11 +42,6 @@ base = 'feeds/smpackage/luci-app-ssr-plus'
 # =============================================================================
 with open(f'{base}/Makefile', 'r') as f:
     content = f.read()
-
-mf_guard = 'CONFIG_PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Client'
-if mf_guard not in content:
-    print("FATAL: Makefile format changed — cannot apply ss-libev patches")
-    sys.exit(1)
 
 content = content.replace(
     'CONFIG_PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_NONE_Client \\',
@@ -46,19 +55,12 @@ new_dep = (
     '\t+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Client:shadowsocks-libev-ss-redir \\\n'
     '\t+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Client:shadowsocks-rust-sslocal \\'
 )
-if old_dep in content:
-    content = content.replace(old_dep, new_dep)
-    print("Makefile: client depends OK")
-else:
-    print("WARNING: Makefile client depends pattern NOT found")
+content = content.replace(old_dep, new_dep)
 
+# Add Libev_Server package depends (shadowsocks-libev-ss-server)
 old_server_dep = '+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Server:shadowsocks-rust-ssserver \\'
 new_server_dep = '+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev_Server:shadowsocks-libev-ss-server \\\n\t' + old_server_dep
-if old_server_dep in content:
-    content = content.replace(old_server_dep, new_server_dep)
-    print("Makefile: server depends OK")
-else:
-    print("WARNING: Makefile server depends pattern NOT found")
+content = content.replace(old_server_dep, new_server_dep)
 
 content = content.replace(
     '\tconfig PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Client',
@@ -80,13 +82,10 @@ print("Makefile: done")
 with open(f'{base}/luasrc/model/cbi/shadowsocksr/client-config.lua', 'r') as f:
     content = f.read()
 
-lua_guard = 'local has_ss_rust = is_finded("sslocal") or is_finded("ssserver")'
-if lua_guard in content:
-    content = content.replace(lua_guard,
-        lua_guard + '\nlocal has_ss_libev = is_finded("ss-redir") or is_finded("ss-local")')
-    print("client-config: has_ss_libev detection OK")
-else:
-    print("WARNING: client-config has_ss_rust NOT found")
+content = content.replace(
+    'local has_ss_rust = is_finded("sslocal") or is_finded("ssserver")',
+    'local has_ss_rust = is_finded("sslocal") or is_finded("ssserver")\nlocal has_ss_libev = is_finded("ss-redir") or is_finded("ss-local")'
+)
 
 old_block = (
     'if has_ss_rust then\n'
@@ -107,13 +106,10 @@ if old_block in content:
 else:
     print("WARNING: ss-rust block NOT found in client-config.lua")
 
-dep_guard = 'o:depends("type", "ss-rust")'
-if dep_guard in content:
-    content = content.replace(dep_guard,
-        'o:depends("type", "ss-rust")\n\to:depends("type", "ss-libev")')
-    print("client-config: ss-libev depends OK")
-else:
-    print("WARNING: client-config depends NOT found")
+content = content.replace(
+    'o:depends("type", "ss-rust")',
+    'o:depends("type", "ss-rust")\n\to:depends("type", "ss-libev")'
+)
 
 with open(f'{base}/luasrc/model/cbi/shadowsocksr/client-config.lua', 'w') as f:
     f.write(content)
@@ -140,20 +136,17 @@ with open(gen_config_path, 'w') as f:
     f.write(content)
 
 # =============================================================================
-# LuCI subscribe.lua: add ss-libev to preferred_ss_backend()
+# LuCI subscribe.lua: add ss-libev to preferred_ss_backend() for subscription import
 # =============================================================================
 subscribe_path = f'{base}/root/usr/share/shadowsocksr/subscribe.lua'
 with open(subscribe_path, 'r') as f:
     content = f.read()
 
-# Add has_ss_libev detection after has_ss_rust
-sub_guard = 'local has_ss_rust = luci.sys.exec(\'type -t -p sslocal 2>/dev/null || type -t -p ssserver 2>/dev/null\') ~= ""'
-if sub_guard in content:
-    content = content.replace(sub_guard,
-        sub_guard + '\nlocal has_ss_libev = luci.sys.exec(\'type -t -p ss-redir 2>/dev/null || type -t -p ss-local 2>/dev/null || type -t -p ss-server 2>/dev/null\') ~= ""')
-    print("subscribe.lua: has_ss_libev detection OK")
-else:
-    print("WARNING: subscribe.lua has_ss_rust NOT found")
+# Add has_ss_libev detection after has_ss_rust (includes ss-server for server mode)
+content = content.replace(
+    'local has_ss_rust = luci.sys.exec(\'type -t -p sslocal 2>/dev/null || type -t -p ssserver 2>/dev/null\') ~= ""',
+    'local has_ss_rust = luci.sys.exec(\'type -t -p sslocal 2>/dev/null || type -t -p ssserver 2>/dev/null\') ~= ""\nlocal has_ss_libev = luci.sys.exec(\'type -t -p ss-redir 2>/dev/null || type -t -p ss-local 2>/dev/null || type -t -p ss-server 2>/dev/null\') ~= ""'
+)
 
 # Add ss-libev to preferred_ss_backend() after ss-rust block
 old_func = (
@@ -179,8 +172,9 @@ else:
 
 with open(subscribe_path, 'w') as f:
     f.write(content)
+
 # =============================================================================
-# LuCI server-config.lua: add ss-libev server type detection
+# LuCI server-config.lua: add ss-libev server type detection + depends
 # =============================================================================
 server_config_path = f'{base}/luasrc/model/cbi/shadowsocksr/server-config.lua'
 with open(server_config_path, 'r') as f:
@@ -195,7 +189,7 @@ if old_block in content:
 else:
     print("WARNING: server-config.lua ss block NOT found")
 
-# Add ss-libev to depends for ss-specific options
+# Add ss-libev to depends for ss-specific options (timeout, password, encrypt_method_ss, fast_open)
 depends_fixes = [
     # timeout: ss + ssr -> ss + ss-libev + ssr
     ('o:depends("type", "ss")\no:depends("type", "ssr")',
@@ -227,94 +221,60 @@ with open(init_path, 'r') as f:
 errors = []
 
 # P1: Stop _migrate_xray_protocol_node from converting ss-libev->ss-rust
-# line-based match, robust against whitespace drift
-p1_done = False
-for i, line in enumerate(content.split(chr(10))):
-    if '[ "$type" = "ss" ] || [ "$type" = "ss-libev" ]' in line:
-        repl = line.replace('[ "$type" = "ss" ] || [ "$type" = "ss-libev" ]', '[ "$type" = "ss" ]')
-        content = content.replace(line, repl)
-        p1_done = True
-        break
-if p1_done:
+old = '\t\tif [ "$type" = "ss" ] || [ "$type" = "ss-libev" ]; then'
+new = '\t\tif [ "$type" = "ss" ]; then'
+if old in content:
+    content = content.replace(old, new)
     print("P1 migration stop: OK")
 else:
     errors.append("P1 migration stop")
 
-# P2: supports_builtin_socks() - add ss-libev
-# line-based match, robust against whitespace drift
-p2_done = False
-for i, line in enumerate(content.split(chr(10))):
-    if 'ss|clash|tuic|v2ray)' in line:
-        indent = line[:len(line) - len(line.lstrip())]
-        repl = indent + 'ss|ss-libev|clash|tuic|v2ray)'
-        content = content.replace(line, repl)
-        p2_done = True
-        break
-if p2_done:
+# P2: supports_builtin_socks() — add ss-libev
+old = '\tss|clash|tuic|v2ray)'
+new = '\tss|ss-libev|clash|tuic|v2ray)'
+if old in content:
+    content = content.replace(old, new)
     print("P2 supports_builtin_socks: OK")
 else:
     errors.append("P2 supports_builtin_socks")
 
 # P3: UDP relay normalization
-# line-based match, robust against whitespace drift
-p3_done = False
-for i, line in enumerate(content.split(chr(10))):
-    if '[ "$udp_relay_server_type" = "ss-rust" ]' in line:
-        repl = line.replace('[ "$udp_relay_server_type" = "ss-rust" ]', '[ "$udp_relay_server_type" = "ss-rust" ] || [ "$udp_relay_server_type" = "ss-libev" ]')
-        content = content.replace(line, repl)
-        p3_done = True
-        break
-if p3_done:
+old = '\tif [ "$udp_relay_server_type" = "ss-rust" ]; then\n\t\ttype="ss"\n\tfi'
+new = '\tif [ "$udp_relay_server_type" = "ss-rust" ] || [ "$udp_relay_server_type" = "ss-libev" ]; then\n\t\ttype="ss"\n\tfi'
+if old in content:
+    content = content.replace(old, new)
     print("P3 UDP relay normal.: OK")
 else:
     errors.append("P3 UDP relay normal.")
 
 # P4: SOCKS5 normalization
-# line-based match, robust against whitespace drift
-p4_done = False
-for i, line in enumerate(content.split(chr(10))):
-    if '[ "$local_server_type" = "ss-rust" ]' in line:
-        repl = line.replace('[ "$local_server_type" = "ss-rust" ]', '[ "$local_server_type" = "ss-rust" ] || [ "$local_server_type" = "ss-libev" ]')
-        content = content.replace(line, repl)
-        p4_done = True
-        break
-if p4_done:
+old = '\tif [ "$local_server_type" = "ss-rust" ]; then\n\t\ttype="ss"\n\tfi'
+new = '\tif [ "$local_server_type" = "ss-rust" ] || [ "$local_server_type" = "ss-libev" ]; then\n\t\ttype="ss"\n\tfi'
+if old in content:
+    content = content.replace(old, new)
     print("P4 SOCKS5 normal.: OK")
 else:
     errors.append("P4 SOCKS5 normal.")
 
 # P5: get_udp_relay_mode normalization (uses if/then/fi to avoid ||/&& precedence bug)
-# line-based match, robust against whitespace drift
-p5_done = False
-for i, line in enumerate(content.split(chr(10))):
-    if '[ "$type" = "ss-rust" ] && type="ss"' in line:
-        indent = line[:len(line) - len(line.lstrip())]
-        nl = chr(10)
-        tb = chr(9)
-        repl = indent + 'if [ "$type" = "ss-rust" ] || [ "$type" = "ss-libev" ]; then' + nl + indent + tb + 'type="ss"' + nl + indent + 'fi'
-        content = content.replace(line, repl)
-        p5_done = True
-        break
-if p5_done:
+old = '\t[ "$type" = "ss-rust" ] && type="ss"'
+new = '\tif [ "$type" = "ss-rust" ] || [ "$type" = "ss-libev" ]; then\n\t\ttype="ss"\n\tfi'
+if old in content:
+    content = content.replace(old, new)
     print("P5 get_udp_relay_mode: OK")
 else:
     errors.append("P5 get_udp_relay_mode")
 
 # P6: Start_Run normalization
-# line-based match, robust against whitespace drift
-p6_done = False
-for i, line in enumerate(content.split(chr(10))):
-    if '[ "$global_server_type" = "ss-rust" ]' in line:
-        repl = line.replace('[ "$global_server_type" = "ss-rust" ]', '[ "$global_server_type" = "ss-rust" ] || [ "$global_server_type" = "ss-libev" ]')
-        content = content.replace(line, repl)
-        p6_done = True
-        break
-if p6_done:
+old = '\tif [ "$global_server_type" = "ss-rust" ]; then\n\t\ttype="ss"\n\tfi'
+new = '\tif [ "$global_server_type" = "ss-rust" ] || [ "$global_server_type" = "ss-libev" ]; then\n\t\ttype="ss"\n\tfi'
+if old in content:
+    content = content.replace(old, new)
     print("P6 Start_Run normal.: OK")
 else:
     errors.append("P6 Start_Run normal.")
 
-# P7: Core Start_Run - ss-redir -u for ss-libev
+# P7: Core Start_Run — ss-redir -u for ss-libev
 old_tcp = (
     '\t\telse\n'
     '\t\t\tgen_config_file $GLOBAL_SERVER $type 1 $tcp_port\n'
@@ -356,7 +316,7 @@ if old_tcp in content:
 else:
     errors.append("P7 core start TCP")
 
-# P8: SOCKS5 - ss-local for ss-libev
+# P8: SOCKS5 — ss-local for ss-libev
 old_socks = (
     '\t\telse\n'
     '\t\t\tgen_config_file $LOCAL_SERVER $type 4 $local_port\n'
@@ -398,33 +358,19 @@ if old_socks in content:
 else:
     errors.append("P8 SOCKS5 binary")
 
-
-# P9: Server mode - ss-libev normalization + ss-server binary
-# line-based match, robust against whitespace drift
-p9a_done = False
-lines_p9a = content.split(chr(10))
-for i, line in enumerate(lines_p9a):
-    if '[ "$node_type" = "ss-rust" ]' in line and i+1 < len(lines_p9a) and 'type="ss"' in lines_p9a[i+1]:
-        repl = line.replace('[ "$node_type" = "ss-rust" ]', '[ "$node_type" = "ss-rust" ] || [ "$node_type" = "ss-libev" ]')
-        content = content.replace(line, repl)
-        p9a_done = True
-        break
-if p9a_done:
+# P9: Server mode — ss-libev normalization + ss-server binary
+old_p9a = '\t\t\tif [ "$node_type" = "ss-rust" ]; then\n\t\t\t\ttype="ss"\n\t\t\tfi'
+new_p9a = '\t\t\tif [ "$node_type" = "ss-rust" ] || [ "$node_type" = "ss-libev" ]; then\n\t\t\t\ttype="ss"\n\t\t\tfi'
+if old_p9a in content:
+    content = content.replace(old_p9a, new_p9a)
     print("P9a server norm.: OK")
 else:
     errors.append("P9a server norm.")
 
-# line-based match, robust against whitespace drift
-p9b_done = False
-for i, line in enumerate(content.split(chr(10))):
-    if 'elif [ "$node_type" = "ss-rust" ] || [ "$node_type" = "ss" ]' in line:
-        indent = line[:len(line) - len(line.lstrip())]
-        nl = chr(10)
-        repl = indent + 'elif [ "$node_type" = "ss-libev" ]; then' + nl + indent + chr(9) + 'ss_program="$(first_type ss-server)"' + nl + line
-        content = content.replace(line, repl)
-        p9b_done = True
-        break
-if p9b_done:
+old_p9b = '\t\t\t\t\telif [ "$node_type" = "ss-rust" ] || [ "$node_type" = "ss" ]; then\n\t\t\t\t\t\tss_program="$(first_type ${type}server)"'
+new_p9b = '\t\t\t\t\telif [ "$node_type" = "ss-libev" ]; then\n\t\t\t\t\t\tss_program="$(first_type ss-server)"\n\t\t\t\t\telif [ "$node_type" = "ss-rust" ] || [ "$node_type" = "ss" ]; then\n\t\t\t\t\t\tss_program="$(first_type ${type}server)"'
+if old_p9b in content:
+    content = content.replace(old_p9b, new_p9b)
     print("P9b server binary: OK")
 else:
     errors.append("P9b server binary")
@@ -445,7 +391,6 @@ if extra_norm > 0:
 else:
     print("Sanity check: no double-patch detected")
 PYEOF
-
 
 # =============================================================================
 # ssr-rules: fix duplicate daemon instances (DAEMON_ID + PID tracking)
