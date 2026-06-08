@@ -8,6 +8,10 @@
 #-------------------------------------------------------------------------------------------------------
 #
 # 1. Add stub shadowsocks-libev-config package
+
+# Remove smpackage miniupnpd-iptables to avoid conflict with official miniupnpd nftables variant
+rm -rf feeds/smpackage/miniupnpd-iptables package/feeds/smpackage/miniupnpd-iptables
+
 # 2. Patch SSR Plus: Makefile Kconfig + client-config.lua type dropdown + init script
 #    Supports ss-libev as native node type alongside ss-rust.
 #
