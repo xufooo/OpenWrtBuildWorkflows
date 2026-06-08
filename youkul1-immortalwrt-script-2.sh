@@ -200,8 +200,13 @@ with open(subscribe_path, 'w', encoding='utf-8') as f:
 # LuCI server-config.lua: ss-libev server type + depends
 # =============================================================================
 server_config_path = f'{base}/luasrc/model/cbi/shadowsocksr/server-config.lua'
-with open(server_config_path, 'r', encoding='utf-8') as f:
-    content = f.read()
+# Upstream server-config.lua may be GBK-encoded; try UTF-8 first then fall back
+try:
+    with open(server_config_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+except (UnicodeDecodeError, UnicodeError):
+    with open(server_config_path, 'r', encoding='gbk') as f:
+        content = f.read()
 
 # Add ss-libev server type option
 old_block = 'if nixio.fs.access("/usr/bin/mihomo") or nixio.fs.access("/usr/libexec/mihomo") or nixio.fs.access("/usr/bin/ssserver") or nixio.fs.access("/usr/libexec/ssserver") then\n\to:value("ss", translate("ShadowSocks"))\nend'
