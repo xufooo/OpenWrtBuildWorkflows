@@ -24,7 +24,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 # =============================================================================
-# Patch homeproxy init: respect dnsmasq_default_dns flag
+# Patch homeproxy init + LuCI for dnsmasq_default_dns flag
 # =============================================================================
 INIT_PATH="feeds/smpackage/luci-app-homeproxy/root/etc/init.d/homeproxy"
 LUCIC_PATH="feeds/smpackage/luci-app-homeproxy/htdocs/luci-static/resources/view/homeproxy/client.js"
@@ -39,7 +39,7 @@ if [ ! -f "$LUCIC_PATH" ]; then
 fi
 
 python3 << 'PYEOF'
-import sys
+import sys, re
 
 # =============================================================================
 # Patch 1: homeproxy init — dnsmasq_default_dns flag
@@ -48,89 +48,69 @@ init_path = "feeds/smpackage/luci-app-homeproxy/root/etc/init.d/homeproxy"
 with open(init_path, 'r', encoding='utf-8') as f:
     content = f.read()
 
-old_block = '''\t# DNSMasq rules
-\tlocal ipv6_support dns_port
-\tconfig_get_bool ipv6_support "config" "ipv6_support" "0"
-\tconfig_get dns_port "infra" "dns_port" "5333"
-\tmkdir -p "$DNSMASQ_DIR"
-\techo -e "conf-dir=$DNSMASQ_DIR" > "$DNSMASQ_DIR/../dnsmasq-homeproxy.conf"'''
+# Insert config_get after dns_port read, wrap mkdir+case in if block
+# Anchor: the "# DNSMasq rules" comment line (any leading whitespace)
+old_anchor = '# DNSMasq rules'
+new_anchor = '''# DNSMasq rules
+\t\tlocal dnsmasq_default_dns
+\t\tconfig_get_bool dnsmasq_default_dns "config" "dnsmasq_default_dns" "1"
+\t\tif [ "$dnsmasq_default_dns" = "1" ]; then'''
 
-new_block = '''\t# DNSMasq rules
-\tlocal ipv6_support dns_port dnsmasq_default_dns
-\tconfig_get_bool ipv6_support "config" "ipv6_support" "0"
-\tconfig_get dns_port "infra" "dns_port" "5333"
-\tconfig_get_bool dnsmasq_default_dns "config" "dnsmasq_default_dns" "1"
-\tif [ "$dnsmasq_default_dns" = "1" ]; then
-\tmkdir -p "$DNSMASQ_DIR"
-\techo -e "conf-dir=$DNSMASQ_DIR" > "$DNSMASQ_DIR/../dnsmasq-homeproxy.conf"'''
-
-if old_block not in content:
-    print("FATAL: init DNSMasq rules block not found")
+if old_anchor not in content:
+    print("FATAL (P1): '# DNSMasq rules' comment not found")
     sys.exit(1)
-content = content.replace(old_block, new_block)
+content = content.replace(old_anchor, new_anchor, 1)
 
-# Close the if block — find the last DNSMASQ_DIR usage before "Setup routing table"
-old_line = '\t/etc/init.d/dnsmasq restart >"/dev/null" 2>&1\n\n\t# Setup routing table'
-new_line = '\t/etc/init.d/dnsmasq restart >"/dev/null" 2>&1\n\tfi\n\n\t# Setup routing table'
-if old_line not in content:
-    # Try without the comment
-    old_line = '\t/etc/init.d/dnsmasq restart >"/dev/null" 2>&1\n\n\t# Setup routing'
-    new_line = '\t/etc/init.d/dnsmasq restart >"/dev/null" 2>&1\n\tfi\n\n\t# Setup routing'
-if old_line not in content:
-    print("FATAL: init dnsmasq restart -> routing table block not found")
+# Close the if block before "# Setup routing table"
+old_anchor2 = '# Setup routing table'
+new_anchor2 = '''\t\tfi
+\n\t\t# Setup routing table'''
+if old_anchor2 not in content:
+    print("FATAL (P1): '# Setup routing table' comment not found")
     sys.exit(1)
-content = content.replace(old_line, new_line)
+content = content.replace(old_anchor2, new_anchor2, 1)
 
 with open(init_path, 'w', encoding='utf-8') as f:
     f.write(content)
 print("P1 init dnsmasq_default_dns: OK")
 
-# =============================================================================
 # Verify P1
-# =============================================================================
 with open(init_path, 'r', encoding='utf-8') as f:
     final = f.read()
-for pattern in ['dnsmasq_default_dns', 'if [ "$dnsmasq_default_dns" = "1" ]', 'mkdir -p "$DNSMASQ_DIR"']:
+for pattern in ['dnsmasq_default_dns', 'if [ "$dnsmasq_default_dns" = "1" ]', 'Setup routing table']:
     if pattern not in final:
         print(f"VERIFY FAIL P1: {pattern}")
         sys.exit(1)
 print("VERIFY OK: P1 init")
 
 # =============================================================================
-# Patch 2: LuCI client.js — dnsmasq_default_dns flag (custom mode only, default OFF)
+# Patch 2: LuCI client.js — dnsmasq_default_dns flag
 # =============================================================================
 luci_path = "feeds/smpackage/luci-app-homeproxy/htdocs/luci-static/resources/view/homeproxy/client.js"
 with open(luci_path, 'r', encoding='utf-8') as f:
     content = f.read()
 
-# Find the proxy_mode option and add dnsmasq_default_dns right after it in routing
-old_anchor = '''o = s.taboption('routing', form.ListValue, 'proxy_mode', _('Proxy mode'));'''
-if old_anchor not in content:
-    print("FATAL: proxy_mode option not found in client.js")
+# Insert before ipv6_support option
+old_anchor3 = "o = s.taboption('routing', form.Flag, 'ipv6_support', _('IPv6 support'));"
+if old_anchor3 not in content:
+    print("FATAL (P2): ipv6_support option not found")
     sys.exit(1)
 
-# Insert after the proxy_mode block (find the end: o.rmempty = false;)
-insert_anchor = '''o = s.taboption('routing', form.Flag, 'ipv6_support', _('IPv6 support'));'''
-if insert_anchor not in content:
-    print("FATAL: ipv6_support option not found in client.js")
-    sys.exit(1)
-
-new_flag = '''o = s.taboption('routing', form.Flag, 'dnsmasq_default_dns', _('Set default DNS'),
+new_flag = """o = s.taboption('routing', form.Flag, 'dnsmasq_default_dns', _('Set default DNS'),
 \t_('When enabled, homeproxy sets itself as the default DNS server in dnsmasq. Disable to let SmartDNS manage DNS routing instead.'));
 o.depends('routing_mode', 'custom');
 o.default = o.disabled;
 o.rmempty = false;
 
-\to = s.taboption('routing', form.Flag, 'ipv6_support', _('IPv6 support'));'''
-content = content.replace(insert_anchor, new_flag)
+\to = s.taboption('routing', form.Flag, 'ipv6_support', _('IPv6 support'));"""
+
+content = content.replace(old_anchor3, new_flag, 1)
 
 with open(luci_path, 'w', encoding='utf-8') as f:
     f.write(content)
 print("P2 LuCI dnsmasq_default_dns: OK")
 
-# =============================================================================
 # Verify P2
-# =============================================================================
 with open(luci_path, 'r', encoding='utf-8') as f:
     final = f.read()
 for pattern in ['dnsmasq_default_dns', "depends('routing_mode', 'custom')", 'o.default = o.disabled']:
