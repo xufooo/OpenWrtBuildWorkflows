@@ -200,7 +200,6 @@ jobs:
           # Repackage and rebuild firmware image
           make -C openwrt package/v2ray-plugin/compile V=s
           make -C openwrt package/index V=s
-          rm -rf openwrt/build_dir/target-*/root-*
           make -C openwrt target/install V=s
 
       - name: Check space usage
