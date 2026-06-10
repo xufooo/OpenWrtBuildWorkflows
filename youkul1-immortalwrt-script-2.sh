@@ -7,119 +7,59 @@
 # https://github.com/Curious-r/OpenWrtBuildWorkflows
 #-------------------------------------------------------------------------------------------------------
 #
-# homeproxy-singbox: patch homeproxy for SmartDNS integration
-#   - Add dnsmasq_default_dns flag: skip default DNS injection when disabled
-#   - Custom routing mode defaults to OFF (SmartDNS manages DNS upstream)
+# homeproxy: fix 2 upstream bugs for ujail + fw4 integration
+#   P1: ujail — add procd_add_jail_mount "$HP_DIR/ruleset/" so sing-box can see .srs files
+#   P2: nft wrapper — fw4 reload doesn't look at /var/run/homeproxy/fw4_post.nft;
+#       replace with (echo "table inet fw4 {"; cat fw4_post.nft; echo "}") | nft -f -
 
 set -euo pipefail
-echo "=== script-2: homeproxy SmartDNS integration patching ==="
+echo "=== script-2: homeproxy patching ==="
 
 # Fix: remove smpackage miniupnpd-iptables to avoid conflict with official miniupnpd nftables variant
 rm -rf feeds/smpackage/miniupnpd-iptables package/feeds/smpackage/miniupnpd-iptables
 
-# --- Verify Python3 ---
-if ! command -v python3 >/dev/null 2>&1; then
-	echo "script-2: FATAL: python3 not found"
-	exit 1
-fi
-
-# =============================================================================
-# Patch homeproxy init + LuCI for dnsmasq_default_dns flag
-# =============================================================================
 INIT_PATH="feeds/smpackage/luci-app-homeproxy/root/etc/init.d/homeproxy"
-LUCIC_PATH="feeds/smpackage/luci-app-homeproxy/htdocs/luci-static/resources/view/homeproxy/client.js"
 
 if [ ! -f "$INIT_PATH" ]; then
 	echo "script-2: FATAL: homeproxy init not found at $INIT_PATH"
 	exit 1
 fi
-if [ ! -f "$LUCIC_PATH" ]; then
-	echo "script-2: FATAL: homeproxy client.js not found at $LUCIC_PATH"
+
+# ---------------------------------------------------------------------------
+# P1: ujail ruleset mount
+# Anchor: "procd_add_jail_mount \"\$HP_DIR/certs/\"" — insert ruleset/ after it
+# ---------------------------------------------------------------------------
+sed -i '/procd_add_jail_mount "$HP_DIR\/certs\/"/a\\t\t\tprocd_add_jail_mount "$HP_DIR\/ruleset\/"' "$INIT_PATH"
+grep -q 'ruleset' "$INIT_PATH" && echo "P1 ujail ruleset mount: OK" || { echo "P1 FAIL"; exit 1; }
+
+# ---------------------------------------------------------------------------
+# P2: nft wrapper (start_service + stop_service)
+# Replace "fw4 reload >"/dev/null" 2>&1" with the nft wrapper
+# ---------------------------------------------------------------------------
+sed -i 's|fw4 reload >"/dev/null" 2>&1|(echo "table inet fw4 {"; cat "$RUN_DIR/fw4_post.nft"; echo "}") | nft -f - 2>/dev/null|g' "$INIT_PATH"
+
+# Verify P2 — there should be 2 occurrences of the nft wrapper (start + stop)
+count=$(grep -c 'nft -f - 2>/dev/null' "$INIT_PATH" || true)
+if [ "$count" -eq 2 ]; then
+	echo "P2 nft wrapper: OK (${count}x)"
+else
+	echo "P2 FAIL: expected 2 nft wrappers, found ${count}"
 	exit 1
 fi
 
-python3 << 'PYEOF'
-import sys, re
-
-# =============================================================================
-# Patch 1: homeproxy init — dnsmasq_default_dns flag
-# =============================================================================
-init_path = "feeds/smpackage/luci-app-homeproxy/root/etc/init.d/homeproxy"
-with open(init_path, 'r', encoding='utf-8') as f:
-    content = f.read()
-
-# Insert config_get after dns_port read, wrap mkdir+case in if block
-# Anchor: the "# DNSMasq rules" comment line (any leading whitespace)
-old_anchor = '# DNSMasq rules'
-new_anchor = '''# DNSMasq rules
-\t\tlocal dnsmasq_default_dns
-\t\tconfig_get_bool dnsmasq_default_dns "config" "dnsmasq_default_dns" "1"
-\t\tif [ "$dnsmasq_default_dns" = "1" ]; then'''
-
-if old_anchor not in content:
-    print("FATAL (P1): '# DNSMasq rules' comment not found")
-    sys.exit(1)
-content = content.replace(old_anchor, new_anchor, 1)
-
-# Close the if block before "# Setup routing table"
-old_anchor2 = '# Setup routing table'
-new_anchor2 = '''\t\tfi
-\n\t\t# Setup routing table'''
-if old_anchor2 not in content:
-    print("FATAL (P1): '# Setup routing table' comment not found")
-    sys.exit(1)
-content = content.replace(old_anchor2, new_anchor2, 1)
-
-with open(init_path, 'w', encoding='utf-8') as f:
-    f.write(content)
-print("P1 init dnsmasq_default_dns: OK")
-
-# Verify P1
-with open(init_path, 'r', encoding='utf-8') as f:
-    final = f.read()
-for pattern in ['dnsmasq_default_dns', 'if [ "$dnsmasq_default_dns" = "1" ]', 'Setup routing table']:
-    if pattern not in final:
-        print(f"VERIFY FAIL P1: {pattern}")
-        sys.exit(1)
-print("VERIFY OK: P1 init")
-
-# =============================================================================
-# Patch 2: LuCI client.js — dnsmasq_default_dns flag
-# =============================================================================
-luci_path = "feeds/smpackage/luci-app-homeproxy/htdocs/luci-static/resources/view/homeproxy/client.js"
-with open(luci_path, 'r', encoding='utf-8') as f:
-    content = f.read()
-
-# Insert before ipv6_support option
-old_anchor3 = "o = s.taboption('routing', form.Flag, 'ipv6_support', _('IPv6 support'));"
-if old_anchor3 not in content:
-    print("FATAL (P2): ipv6_support option not found")
-    sys.exit(1)
-
-new_flag = """o = s.taboption('routing', form.Flag, 'dnsmasq_default_dns', _('Set default DNS'),
-\t_('When enabled, homeproxy sets itself as the default DNS server in dnsmasq. Disable to let SmartDNS manage DNS routing instead.'));
-o.depends('routing_mode', 'custom');
-o.default = o.disabled;
-o.rmempty = false;
-
-\to = s.taboption('routing', form.Flag, 'ipv6_support', _('IPv6 support'));"""
-
-content = content.replace(old_anchor3, new_flag, 1)
-
-with open(luci_path, 'w', encoding='utf-8') as f:
-    f.write(content)
-print("P2 LuCI dnsmasq_default_dns: OK")
-
-# Verify P2
-with open(luci_path, 'r', encoding='utf-8') as f:
-    final = f.read()
-for pattern in ['dnsmasq_default_dns', "depends('routing_mode', 'custom')", 'o.default = o.disabled']:
-    if pattern not in final:
-        print(f"VERIFY FAIL P2: {pattern}")
-        sys.exit(1)
-print("VERIFY OK: P2 LuCI")
-
-print("\nAll homeproxy patches applied and verified successfully")
-PYEOF
+# ---------------------------------------------------------------------------
+# Final syntax check
+# ---------------------------------------------------------------------------
+INIT_BAK=$(mktemp)
+cp "$INIT_PATH" "$INIT_BAK"
+# Basic shell syntax check: run sh -n on a copy
+if sh -n "$INIT_BAK" 2>/dev/null; then
+	echo "Syntax check: OK"
+else
+	echo "Syntax check: FAILED"
+	rm -f "$INIT_BAK"
+	exit 1
+fi
+rm -f "$INIT_BAK"
 
 echo "=== script-2: homeproxy patches done ==="
