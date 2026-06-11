@@ -246,10 +246,10 @@ config dns_rule
 	option server 'google_dns'
 
 config dns_rule
-	option label 'Default -> 114 DNS'
+	option label 'Default -> Tencent DNS'
 	option enabled '1'
 	option action 'route'
-	option server 'local_dns'
+	option server 'tencent_dns'
 
 config routing_rule
 	option label 'Ads -> Block'
