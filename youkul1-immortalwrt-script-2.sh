@@ -261,7 +261,8 @@ config routing_rule
 	option label 'BT/P2P'
 	option enabled '1'
 	list protocol 'bittorrent'
-	option action 'reject'
+	option action 'route'
+	option outbound 'direct-out'
 
 config routing_rule
 	option label 'CN IP'
