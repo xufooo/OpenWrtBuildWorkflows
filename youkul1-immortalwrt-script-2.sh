@@ -17,9 +17,6 @@ rm -rf feeds/smpackage/miniupnpd-iptables package/feeds/smpackage/miniupnpd-ipta
 
 CONF_PATH="feeds/smpackage/luci-app-homeproxy/root/etc/config/homeproxy"
 
-# Fix default_server: template uses 114_dns, not the upstream default local-dns
-sed -i "s/option default_server 'local-dns'/option default_server '114_dns'/" "$CONF_PATH"
-
 if grep -q 'HP_TEMPLATE' "$CONF_PATH" 2>/dev/null; then
 	echo "Template already present, skip"
 else
@@ -34,8 +31,8 @@ config routing_node 'proxy_out'
 	option domain_resolver 'default-dns'
 	option domain_strategy 'prefer_ipv4'
 
-config dns_server '114_dns'
-	option label '114 DNS'
+config dns_server 'local_dns'
+	option label 'Local DNS (CN)'
 	option type 'udp'
 	option server '114.114.114.114'
 	option server_port '53'
@@ -239,7 +236,7 @@ config dns_rule
 	option enabled '1'
 	list rule_set 'cn_domain'
 	option action 'route'
-	option server '114_dns'
+	option server 'local_dns'
 
 config dns_rule
 	option label 'Non-CN -> Google DoH'
@@ -252,7 +249,7 @@ config dns_rule
 	option label 'Default -> 114 DNS'
 	option enabled '1'
 	option action 'route'
-	option server '114_dns'
+	option server 'local_dns'
 
 config routing_rule
 	option label 'Ads -> Block'
