@@ -78,11 +78,31 @@ else
 #  Everything else is ready.  DNS servers, rule sets, DNS rules and
 #  routing rules are pre-configured with safe direct-out fallbacks.
 #
-# HP_TEMPLATE — do not remove this line
+#
+# ═══════════════════════════════════════════════════════════════════════
+#  Custom Routing Template -- PassWall-Style Shunt Rules
+# ═══════════════════════════════════════════════════════════════════════
+#
+#  Quick start:
+#    1. Nodes tab         -> add your proxy node(s)
+#    2. Routing Nodes tab -> enable "proxy-out", set node=your-node
+#    3. Find all "(Proxy)" routing rules below, change outbound
+#       from "direct-out" to "proxy-out".  Do the same for
+#       remote-dns in DNS Servers.
+#    4. Start the service.
+#
+#  Shunt categories (matching PassWall):
+#    DirectGame → see category-games-rules; add Steam CDN domains
+#                 to Access Control → Direct Domain List if needed
+#    ProxyGame  → category-games → proxy
+#    AIGC       → AI services → proxy
+#    Streaming  → Netflix / Disney / YouTube / Spotify → proxy
+#    Proxy      → non-CN sites + social / messenger → proxy
+#    Direct     → CN domains + CN IPs → direct
+#
+# HP_TEMPLATE -- PASSWALL-STYLE -- do not remove this line
 
 # ── Routing Node (placeholder) ─────────────────────────────────────
-#  Create this FIRST after adding a proxy node on the Nodes tab.
-#  Set node=your-node, enabled=1, outbound empty (direct to server).
 config routing_node 'proxy-out'
 	option label 'Main Proxy'
 	option enabled '0'
@@ -91,7 +111,6 @@ config routing_node 'proxy-out'
 	option domain_strategy 'prefer_ipv4'
 
 # ── DNS Servers ─────────────────────────────────────────────────────
-#  local-dns: domestic DNS for China sites (UDP, direct)
 config dns_server 'local-dns'
 	option label 'Local DNS (CN)'
 	option type 'udp'
@@ -100,7 +119,6 @@ config dns_server 'local-dns'
 	option outbound 'direct-out'
 	option enabled '1'
 
-#  backup-dns: Tencent DNS as China fallback
 config dns_server 'backup-dns'
 	option label 'Backup DNS (CN)'
 	option type 'udp'
@@ -109,8 +127,6 @@ config dns_server 'backup-dns'
 	option outbound 'direct-out'
 	option enabled '1'
 
-#  remote-dns: Cloudflare DoH for foreign domains (anti-pollution)
-#  → change outbound to 'proxy-out' after creating the routing_node!
 config dns_server 'remote-dns'
 	option label 'Remote DNS (Proxy)'
 	option type 'https'
@@ -122,12 +138,12 @@ config dns_server 'remote-dns'
 	option enabled '1'
 
 # ── Rule Sets ───────────────────────────────────────────────────────
-#  Remote binary .srs rule sets, auto-updated every 72h
+#  China routing
 config ruleset 'cn-domain'
 	option label 'CN Domains'
 	option type 'remote'
 	option format 'binary'
-	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set-unstable/geosite-geolocation-cn.srs'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-geolocation-cn.srs'
 	option update_interval '72h'
 	option enabled '1'
 
@@ -139,6 +155,14 @@ config ruleset 'cn-ip'
 	option update_interval '72h'
 	option enabled '1'
 
+config ruleset 'non-cn'
+	option label 'Non-CN Sites'
+	option type 'remote'
+	option format 'binary'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-geolocation-!cn.srs'
+	option update_interval '72h'
+	option enabled '1'
+
 config ruleset 'gfw'
 	option label 'GFW List'
 	option type 'remote'
@@ -146,15 +170,8 @@ config ruleset 'gfw'
 	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-gfw.srs'
 	option update_interval '72h'
 	option enabled '1'
-# -- Streaming / AI --
-config ruleset 'openai'
-	option label 'OpenAI / ChatGPT'
-	option type 'remote'
-	option format 'binary'
-	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-openai.srs'
-	option update_interval '72h'
-	option enabled '1'
 
+#  Streaming
 config ruleset 'netflix'
 	option label 'Netflix'
 	option type 'remote'
@@ -171,14 +188,6 @@ config ruleset 'disney'
 	option update_interval '72h'
 	option enabled '1'
 
-config ruleset 'spotify'
-	option label 'Spotify'
-	option type 'remote'
-	option format 'binary'
-	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-spotify.srs'
-	option update_interval '72h'
-	option enabled '1'
-
 config ruleset 'youtube'
 	option label 'YouTube'
 	option type 'remote'
@@ -187,7 +196,40 @@ config ruleset 'youtube'
 	option update_interval '72h'
 	option enabled '1'
 
-# -- Social / Messaging --
+config ruleset 'spotify'
+	option label 'Spotify'
+	option type 'remote'
+	option format 'binary'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-spotify.srs'
+	option update_interval '72h'
+	option enabled '1'
+
+#  AI
+config ruleset 'openai'
+	option label 'OpenAI / ChatGPT'
+	option type 'remote'
+	option format 'binary'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-openai.srs'
+	option update_interval '72h'
+	option enabled '1'
+
+config ruleset 'ai-services'
+	option label 'AI Services'
+	option type 'remote'
+	option format 'binary'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-category-ai-!cn.srs'
+	option update_interval '72h'
+	option enabled '1'
+
+config ruleset 'apple-ai'
+	option label 'Apple Intelligence'
+	option type 'remote'
+	option format 'binary'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-apple-intelligence.srs'
+	option update_interval '72h'
+	option enabled '1'
+
+#  Social / Messenger
 config ruleset 'telegram'
 	option label 'Telegram'
 	option type 'remote'
@@ -220,7 +262,7 @@ config ruleset 'github'
 	option update_interval '72h'
 	option enabled '1'
 
-# -- Ad Blocking --
+#  Blocking
 config ruleset 'ads'
 	option label 'Ad Blocking'
 	option type 'remote'
@@ -229,10 +271,24 @@ config ruleset 'ads'
 	option update_interval '72h'
 	option enabled '1'
 
+config ruleset 'private-ip'
+	option label 'Private IPs'
+	option type 'remote'
+	option format 'binary'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-private.srs'
+	option update_interval '72h'
+	option enabled '1'
+
+#  Games
+config ruleset 'games'
+	option label 'Games'
+	option type 'remote'
+	option format 'binary'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-category-games.srs'
+	option update_interval '72h'
+	option enabled '1'
 
 # ── DNS Rules ───────────────────────────────────────────────────────
-#  Matched top-to-bottom, first win.
-#  Block SVCB/HTTPS queries to prevent Apple device fingerprinting
 config dns_rule
 	option label 'Block SVCB/HTTPS'
 	option enabled '1'
@@ -240,7 +296,6 @@ config dns_rule
 	list query_type '65'
 	option action 'reject'
 
-#  GFW-listed domains → remote DNS (anti-pollution for known blocked)
 config dns_rule
 	option label 'GFW -> Remote DNS'
 	option enabled '1'
@@ -248,15 +303,6 @@ config dns_rule
 	option action 'route'
 	option server 'remote-dns'
 
-#  CN domains → local DNS (fast domestic resolution)
-config dns_rule
-	option label 'CN -> Local DNS'
-	option enabled '1'
-	list rule_set 'cn-domain'
-	option action 'route'
-	option server 'local-dns'
-
-#  Catch-all → remote DNS
 config dns_rule
 	option label 'Ads -> Block (DNS)'
 	option enabled '1'
@@ -264,14 +310,19 @@ config dns_rule
 	option action 'reject'
 
 config dns_rule
+	option label 'CN -> Local DNS'
+	option enabled '1'
+	list rule_set 'cn-domain'
+	option action 'route'
+	option server 'local-dns'
+
+config dns_rule
 	option label 'Default -> Remote DNS'
 	option enabled '1'
 	option action 'route'
 	option server 'remote-dns'
 
-# ── Routing Rules ───────────────────────────────────────────────────
-#  Matched top-to-bottom, first win.
-#  CN IP ranges → direct (bypass proxy)
+# ── Routing Rules  (PassWall shunt order) ───────────────────────────
 config routing_rule
 	option label 'Ads -> Block'
 	option enabled '1'
@@ -284,20 +335,39 @@ config routing_rule
 	list protocol 'bittorrent'
 	option action 'reject'
 
+#  Direct — CN IP + private IP
 config routing_rule
-	option label 'CN IP -> Direct'
+	option label 'Direct — CN IP'
 	option enabled '1'
 	list rule_set 'cn-ip'
 	option action 'route'
 	option outbound 'direct-out'
 
 config routing_rule
-	option label 'OpenAI -> (Proxy)'
+	option label 'Direct — Private IP'
 	option enabled '1'
-	list rule_set 'openai'
+	list rule_set 'private-ip'
 	option action 'route'
 	option outbound 'direct-out'
 
+#  ProxyGame — games
+config routing_rule
+	option label 'Games -> (Proxy)'
+	option enabled '1'
+	list rule_set 'games'
+	option action 'route'
+	option outbound 'direct-out'
+
+#  AIGC — AI services
+config routing_rule
+	option label 'AI -> (Proxy)'
+	option enabled '1'
+	list rule_set 'ai-services'
+	list rule_set 'apple-ai'
+	option action 'route'
+	option outbound 'direct-out'
+
+#  Streaming
 config routing_rule
 	option label 'Netflix -> (Proxy)'
 	option enabled '1'
@@ -313,19 +383,20 @@ config routing_rule
 	option outbound 'direct-out'
 
 config routing_rule
-	option label 'Spotify -> (Proxy)'
-	option enabled '1'
-	list rule_set 'spotify'
-	option action 'route'
-	option outbound 'direct-out'
-
-config routing_rule
 	option label 'YouTube -> (Proxy)'
 	option enabled '1'
 	list rule_set 'youtube'
 	option action 'route'
 	option outbound 'direct-out'
 
+config routing_rule
+	option label 'Spotify -> (Proxy)'
+	option enabled '1'
+	list rule_set 'spotify'
+	option action 'route'
+	option outbound 'direct-out'
+
+#  Social / Messenger
 config routing_rule
 	option label 'Telegram -> (Proxy)'
 	option enabled '1'
@@ -354,12 +425,29 @@ config routing_rule
 	option action 'route'
 	option outbound 'direct-out'
 
+#  Proxy — non-CN + OpenAI
+config routing_rule
+	option label 'OpenAI -> (Proxy)'
+	option enabled '1'
+	list rule_set 'openai'
+	option action 'route'
+	option outbound 'direct-out'
+
+config routing_rule
+	option label 'Non-CN -> (Proxy)'
+	option enabled '1'
+	list rule_set 'non-cn'
+	option action 'route'
+	option outbound 'direct-out'
+
+#  Catch-all -> Proxy
 config routing_rule
 	option label 'Default -> Proxy'
 	option enabled '1'
 	option action 'route'
 	option outbound 'direct-out'
-CONFEOF
+
+
 
 	grep -q 'HP_TEMPLATE' "$CONF_PATH" && echo "P4 template: OK" || { echo "P4 FAIL"; exit 1; }
 fi
