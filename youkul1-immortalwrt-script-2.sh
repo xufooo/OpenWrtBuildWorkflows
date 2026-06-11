@@ -238,10 +238,17 @@ config dns_rule
 	option server '114_dns'
 
 config dns_rule
-	option label 'Default -> Google DoH'
+	option label 'Non-CN -> Google DoH'
 	option enabled '1'
+	list rule_set 'non_cn'
 	option action 'route'
 	option server 'google_dns'
+
+config dns_rule
+	option label 'Default -> 114 DNS'
+	option enabled '1'
+	option action 'route'
+	option server '114_dns'
 
 config routing_rule
 	option label 'Ads -> Block'
@@ -355,11 +362,11 @@ config routing_rule
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'Default -> Proxy'
+	option label 'Default -> Direct'
 	option enabled '1'
 	option action 'route'
-	option outbound 'proxy_out'
-CONFEOF
+	option outbound 'direct-out'
+
 	echo "Template appended"
 fi
 
