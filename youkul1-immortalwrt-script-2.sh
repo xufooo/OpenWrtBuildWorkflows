@@ -9,7 +9,7 @@
 #
 # 1. Remove smpackage miniupnpd-iptables (conflict with official nftables variant)
 # 2. Append custom-mode routing template (idempotent, HP_TEMPLATE guarded)
-# 3. P5: ECH import support for VLESS/Trojan subscription share links
+# 3. P5: ECH import support for VLESS/Trojan share links and subscriptions
 
 set -euo pipefail
 echo "=== script-2 ==="
@@ -373,7 +373,7 @@ CONFEOF
 fi
 
 # ===========================================================================
-# P5: ECH import support for VLESS/Trojan subscription share links
+# P5: ECH import support for VLESS/Trojan share links and subscriptions
 # ===========================================================================
 NODEJS_PATH="feeds/smpackage/luci-app-homeproxy/htdocs/luci-static/resources/view/homeproxy/node.js"
 
@@ -385,16 +385,49 @@ path = "feeds/smpackage/luci-app-homeproxy/htdocs/luci-static/resources/view/hom
 with open(path, 'r', encoding='utf-8') as f:
     content = f.read()
 
-# VLess ECH: support both standard (security=ech+EchConfigList) and ech=SNI+DNS formats
+# ECH config in sing-box is PEM, while share links usually carry the DNS HTTPS
+# ech value as raw base64. Normalize it at import time so sing-box check passes.
+helper = """function normalizeECHConfig(value) {
+\tif (!value)
+\t\treturn null;
+
+\tvalue = decodeURIComponent(value).replace(/ /g, '+');
+\tif (value.includes('BEGIN ECH CONFIGS'))
+\t\treturn value;
+
+\treturn '-----BEGIN ECH CONFIGS-----\\n' + value + '\\n-----END ECH CONFIGS-----';
+}
+
+function applyECHParam(config, echParam) {
+\tif (!echParam)
+\t\treturn;
+
+\tconst sep = echParam.includes('+') ? echParam.indexOf('+') : echParam.indexOf(' ');
+\tif (sep <= 0)
+\t\treturn;
+
+\tconfig.tls = '1';
+\tconfig.tls_ech = '1';
+\tconfig.tls_sni = decodeURIComponent(echParam.slice(0, sep));
+\tconfig.tls_ech_config = normalizeECHConfig(echParam.slice(sep + 1));
+}
+
+"""
+anchor = "function parseShareLink(uri, features) {\n"
+if "function normalizeECHConfig(value)" not in content:
+    assert anchor in content, "ECH helper anchor not found"
+    content = content.replace(anchor, helper + anchor, 1)
+
+# VLess ECH: support standard (security=ech+EchConfigList), DNS auto-fetch, and ech=SNI+DNS formats
 old = "\t\t\t\tvless_flow: ['tls', 'reality'].includes(params.get('security')) ? params.get('flow') : null\n\t\t\t};"
-new = "\t\t\t\tvless_flow: ['tls', 'reality'].includes(params.get('security')) ? params.get('flow') : null,\n\t\t\t\ttls_ech: (params.get('security') === 'ech') ? '1' : '0',\n\t\t\t\ttls_ech_config: params.get('EchConfigList') ? decodeURIComponent(params.get('EchConfigList')) : null\n\t\t\t};\n\n\t\t\t// ECH: &ech=SNI+base64DNS\n\t\t\tconst echParam = params.get('ech');\n\t\t\tif (echParam && !config.tls_ech) {\n\t\t\t\tconst parts = echParam.split('+');\n\t\t\t\tif (parts.length >= 2) {\n\t\t\t\t\tconfig.tls_ech = '1';\n\t\t\t\t\tconfig.tls_ech_config = decodeURIComponent(parts.slice(1).join('+'));\n\t\t\t\t\tconfig.tls_sni = decodeURIComponent(parts[0]);\n\t\t\t\t}\n\t\t\t}"
+new = "\t\t\t\tvless_flow: ['tls', 'reality'].includes(params.get('security')) ? params.get('flow') : null,\n\t\t\t\ttls_ech: (params.get('security') === 'ech' || params.get('ech')) ? '1' : '0',\n\t\t\t\ttls_ech_config: normalizeECHConfig(params.get('EchConfigList'))\n\t\t\t};\n\n\t\t\tif (config.tls_ech === '1')\n\t\t\t\tconfig.tls = '1';\n\t\t\tapplyECHParam(config, params.get('ech'));"
 assert old in content, "VLess ECH anchor not found"
 content = content.replace(old, new, 1)
 print("P5 VLess ECH: OK")
 
-# Trojan ECH: support both standard and ech=SNI+DNS formats
-old = "\t\t\ttls_sni: params.get('sni')\n\t\t\t};\n\t\t\tswitch (params.get('type')) {"
-new = "\t\t\ttls_sni: params.get('sni'),\n\t\t\ttls_ech: (params.get('security') === 'ech') ? '1' : '0',\n\t\t\ttls_ech_config: params.get('EchConfigList') ? decodeURIComponent(params.get('EchConfigList')) : null\n\t\t\t};\n\n\t\t\t// ECH: &ech=SNI+base64DNS\n\t\t\tconst echParam = params.get('ech');\n\t\t\tif (echParam && !config.tls_ech) {\n\t\t\t\tconst parts = echParam.split('+');\n\t\t\t\tif (parts.length >= 2) {\n\t\t\t\t\tconfig.tls_ech = '1';\n\t\t\t\t\tconfig.tls_ech_config = decodeURIComponent(parts.slice(1).join('+'));\n\t\t\t\t\tconfig.tls_sni = decodeURIComponent(parts[0]);\n\t\t\t\t}\n\t\t\t}\n\t\t\tswitch (params.get('type')) {"
+# Trojan ECH: support standard (security=ech+EchConfigList), DNS auto-fetch, and ech=SNI+DNS formats
+old = "\t\t\t\ttls_sni: params.get('sni')\n\t\t\t};\n\t\t\tswitch (params.get('type')) {"
+new = "\t\t\t\ttls_sni: params.get('sni'),\n\t\t\t\ttls_ech: (params.get('security') === 'ech' || params.get('ech')) ? '1' : '0',\n\t\t\t\ttls_ech_config: normalizeECHConfig(params.get('EchConfigList'))\n\t\t\t};\n\n\t\t\tapplyECHParam(config, params.get('ech'));\n\t\t\tswitch (params.get('type')) {"
 assert old in content, "Trojan ECH anchor not found"
 content = content.replace(old, new, 1)
 print("P5 Trojan ECH: OK")
@@ -406,6 +439,69 @@ PYEOF
 	echo "P5 ECH import: done"
 else
 	echo "P5 ECH import: SKIP"
+fi
+
+SUBS_PATH="feeds/smpackage/luci-app-homeproxy/root/etc/homeproxy/scripts/update_subscriptions.uc"
+
+if [ -f "$SUBS_PATH" ] && command -v python3 >/dev/null 2>&1; then
+	python3 << 'PYEOF'
+path = "feeds/smpackage/luci-app-homeproxy/root/etc/homeproxy/scripts/update_subscriptions.uc"
+with open(path, 'r', encoding='utf-8') as f:
+    content = f.read()
+
+helper = """function normalize_ech_config(value) {
+\tif (isEmpty(value))
+\t\treturn null;
+
+\tvalue = replace(urldecode(value), / /g, '+');
+\tif (match(value, /BEGIN ECH CONFIGS/))
+\t\treturn value;
+
+\treturn '-----BEGIN ECH CONFIGS-----\\n' + value + '\\n-----END ECH CONFIGS-----';
+}
+
+function apply_ech_param(config, ech_param) {
+\tif (isEmpty(ech_param))
+\t\treturn;
+
+\tech_param = urldecode(ech_param);
+\tlet sep = index(ech_param, '+');
+\tif (sep < 0)
+\t\tsep = index(ech_param, ' ');
+\tif (sep <= 0)
+\t\treturn;
+
+\tconfig.tls = '1';
+\tconfig.tls_ech = '1';
+\tconfig.tls_sni = urldecode(substr(ech_param, 0, sep));
+\tconfig.tls_ech_config = normalize_ech_config(substr(ech_param, sep + 1));
+}
+
+"""
+anchor = "/* Common var start */\n"
+if "function normalize_ech_config(value)" not in content:
+    assert anchor in content, "subscription ECH helper anchor not found"
+    content = content.replace(anchor, helper + anchor, 1)
+
+old = "\t\t\tconfig = {\n\t\t\t\tlabel: url.hash ? urldecode(url.hash) : null,\n\t\t\t\ttype: 'trojan',\n\t\t\t\taddress: url.hostname,\n\t\t\t\tport: url.port,\n\t\t\t\tpassword: urldecode(url.username),\n\t\t\t\ttransport: (params.type !== 'tcp') ? params.type : null,\n\t\t\t\ttls: '1',\n\t\t\t\ttls_sni: params.sni\n\t\t\t};\n\t\t\tswitch(params.type) {"
+new = "\t\t\tconfig = {\n\t\t\t\tlabel: url.hash ? urldecode(url.hash) : null,\n\t\t\t\ttype: 'trojan',\n\t\t\t\taddress: url.hostname,\n\t\t\t\tport: url.port,\n\t\t\t\tpassword: urldecode(url.username),\n\t\t\t\ttransport: (params.type !== 'tcp') ? params.type : null,\n\t\t\t\ttls: '1',\n\t\t\t\ttls_sni: params.sni,\n\t\t\t\ttls_ech: (params.security === 'ech' || params.ech) ? '1' : '0',\n\t\t\t\ttls_ech_config: normalize_ech_config(params.EchConfigList)\n\t\t\t};\n\t\t\tapply_ech_param(config, params.ech);\n\t\t\tswitch(params.type) {"
+assert old in content, "subscription Trojan ECH anchor not found"
+content = content.replace(old, new, 1)
+print("P5 subscription Trojan ECH: OK")
+
+old = "\t\t\tconfig = {\n\t\t\t\tlabel: url.hash ? urldecode(url.hash) : null,\n\t\t\t\ttype: 'vless',\n\t\t\t\taddress: url.hostname,\n\t\t\t\tport: url.port,\n\t\t\t\tuuid: url.username,\n\t\t\t\ttransport: (params.type !== 'tcp') ? params.type : null,\n\t\t\t\ttls: (params.security in ['tls', 'xtls', 'reality']) ? '1' : '0',\n\t\t\t\ttls_sni: params.sni,\n\t\t\t\ttls_alpn: params.alpn ? split(urldecode(params.alpn), ',') : null,\n\t\t\t\ttls_reality: (params.security === 'reality') ? '1' : '0',\n\t\t\t\ttls_reality_public_key: params.pbk ? urldecode(params.pbk) : null,\n\t\t\t\ttls_reality_short_id: params.sid,\n\t\t\t\ttls_utls: sing_features.with_utls ? params.fp : null,\n\t\t\t\tvless_flow: (params.security in ['tls', 'reality']) ? params.flow : null\n\t\t\t};\n\t\t\tswitch(params.type) {"
+new = "\t\t\tconfig = {\n\t\t\t\tlabel: url.hash ? urldecode(url.hash) : null,\n\t\t\t\ttype: 'vless',\n\t\t\t\taddress: url.hostname,\n\t\t\t\tport: url.port,\n\t\t\t\tuuid: url.username,\n\t\t\t\ttransport: (params.type !== 'tcp') ? params.type : null,\n\t\t\t\ttls: (params.security in ['tls', 'xtls', 'reality', 'ech'] || params.ech) ? '1' : '0',\n\t\t\t\ttls_sni: params.sni,\n\t\t\t\ttls_alpn: params.alpn ? split(urldecode(params.alpn), ',') : null,\n\t\t\t\ttls_reality: (params.security === 'reality') ? '1' : '0',\n\t\t\t\ttls_reality_public_key: params.pbk ? urldecode(params.pbk) : null,\n\t\t\t\ttls_reality_short_id: params.sid,\n\t\t\t\ttls_utls: sing_features.with_utls ? params.fp : null,\n\t\t\t\tvless_flow: (params.security in ['tls', 'reality']) ? params.flow : null,\n\t\t\t\ttls_ech: (params.security === 'ech' || params.ech) ? '1' : '0',\n\t\t\t\ttls_ech_config: normalize_ech_config(params.EchConfigList)\n\t\t\t};\n\t\t\tapply_ech_param(config, params.ech);\n\t\t\tswitch(params.type) {"
+assert old in content, "subscription VLess ECH anchor not found"
+content = content.replace(old, new, 1)
+print("P5 subscription VLess ECH: OK")
+
+with open(path, 'w', encoding='utf-8') as f:
+    f.write(content)
+PYEOF
+
+	echo "P5 subscription ECH import: done"
+else
+	echo "P5 subscription ECH import: SKIP"
 fi
 
 echo "=== done ==="
