@@ -372,32 +372,101 @@ CONFEOF
 	echo "Template appended"
 fi
 
-# ===========================================================================
 # P5: ECH import support for VLESS/Trojan subscription share links
 # ===========================================================================
-NODEJS_PATH="feeds/smpackage/luci-app-homeproxy/htdocs/luci-static/resources/view/homeproxy/node.js"
+# Patches update_subscriptions.uc (subscription backend) to parse:
+#   ech=<SNI>+<base64_or_URL>  (overrides tls_sni, sets tls_ech_config)
+#   ech=<SNI>                   (overrides tls_sni only)
+#   security=ech + EchConfigList  (standard sing-box format)
+SUB_PATH="feeds/smpackage/luci-app-homeproxy/root/etc/homeproxy/scripts/update_subscriptions.uc"
 
-if [ -f "$NODEJS_PATH" ] && command -v python3 >/dev/null 2>&1; then
+if [ -f "$SUB_PATH" ] && command -v python3 >/dev/null 2>&1; then
 	python3 << 'PYEOF'
 import sys
 
-path = "feeds/smpackage/luci-app-homeproxy/htdocs/luci-static/resources/view/homeproxy/node.js"
+path = "feeds/smpackage/luci-app-homeproxy/root/etc/homeproxy/scripts/update_subscriptions.uc"
 with open(path, 'r', encoding='utf-8') as f:
     content = f.read()
 
-# VLess ECH: support both standard (security=ech+EchConfigList) and edgetunnel (ech=SNI+DNS) formats
-old = "\t\t\t\tvless_flow: ['tls', 'reality'].includes(params.get('security')) ? params.get('flow') : null\n\t\t\t};"
-new = "\t\t\t\tvless_flow: ['tls', 'reality'].includes(params.get('security')) ? params.get('flow') : null,\n\t\t\t\ttls_ech: (params.get('security') === 'ech') ? '1' : '0',\n\t\t\t\ttls_ech_config: params.get('EchConfigList') ? decodeURIComponent(params.get('EchConfigList')) : null\n\t\t\t};\n\n\t\t\t// edgetunnel ECH: &ech=SNI+base64DNS\n\t\t\tconst echParam = params.get('ech');\n\t\t\tif (echParam && !config.tls_ech) {\n\t\t\t\tconst parts = echParam.split('+');\n\t\t\t\tif (parts.length >= 2) {\n\t\t\t\t\tconfig.tls_ech = '1';\n\t\t\t\t\tconfig.tls_ech_config = decodeURIComponent(parts.slice(1).join('+'));\n\t\t\t\t\tconfig.tls_sni = decodeURIComponent(parts[0]);\n\t\t\t\t}\n\t\t\t}"
-assert old in content, "VLess ECH anchor not found"
+# VLess ECH: insert after vless_flow line, before closing };
+old = "				vless_flow: (params.security in ['tls', 'reality']) ? params.flow : null
+			};"
+new = (
+    "				vless_flow: (params.security in ['tls', 'reality']) ? params.flow : null
+"
+    "			};
+"
+    "			if (params.ech) {
+"
+    "				config.tls_ech = '1';
+"
+    "				const ech_parts = split(params.ech, '+');
+"
+    "				if (length(ech_parts) >= 2) {
+"
+    "					config.tls_sni = urldecode(ech_parts[0]);
+"
+    "					config.tls_ech_config = urldecode(ech_parts[1]);
+"
+    "				} else {
+"
+    "					config.tls_sni = urldecode(ech_parts[0]);
+"
+    "				}
+"
+    "			}
+"
+    "			if (!config.tls_ech && params.security === 'ech')
+"
+    "				config.tls_ech = '1';
+"
+    "			if (params.EchConfigList)
+"
+    "				config.tls_ech_config = urldecode(params.EchConfigList);"
+)
+assert old in content, 'VLess ECH anchor not found'
 content = content.replace(old, new, 1)
-print("P5 VLess ECH: OK")
+print('P5 VLess ECH: OK')
 
-# Trojan ECH: support both standard and edgetunnel formats
-old = "\t\t\ttls_sni: params.get('sni')\n\t\t\t};\n\t\t\tswitch (params.get('type')) {"
-new = "\t\t\ttls_sni: params.get('sni'),\n\t\t\ttls_ech: (params.get('security') === 'ech') ? '1' : '0',\n\t\t\ttls_ech_config: params.get('EchConfigList') ? decodeURIComponent(params.get('EchConfigList')) : null\n\t\t\t};\n\n\t\t\t// edgetunnel ECH: &ech=SNI+base64DNS\n\t\t\tconst echParam = params.get('ech');\n\t\t\tif (echParam && !config.tls_ech) {\n\t\t\t\tconst parts = echParam.split('+');\n\t\t\t\tif (parts.length >= 2) {\n\t\t\t\t\tconfig.tls_ech = '1';\n\t\t\t\t\tconfig.tls_ech_config = decodeURIComponent(parts.slice(1).join('+'));\n\t\t\t\t\tconfig.tls_sni = decodeURIComponent(parts[0]);\n\t\t\t\t}\n\t\t\t}\n\t\t\tswitch (params.get('type')) {"
-assert old in content, "Trojan ECH anchor not found"
+# Trojan ECH: insert after tls_sni line, before closing };
+old = "				tls_sni: params.sni
+			};"
+new = (
+    "				tls_sni: params.sni
+"
+    "			};
+"
+    "			if (params.ech) {
+"
+    "				config.tls_ech = '1';
+"
+    "				const ech_parts = split(params.ech, '+');
+"
+    "				if (length(ech_parts) >= 2) {
+"
+    "					config.tls_sni = urldecode(ech_parts[0]);
+"
+    "					config.tls_ech_config = urldecode(ech_parts[1]);
+"
+    "				} else {
+"
+    "					config.tls_sni = urldecode(ech_parts[0]);
+"
+    "				}
+"
+    "			}
+"
+    "			if (!config.tls_ech && params.security === 'ech')
+"
+    "				config.tls_ech = '1';
+"
+    "			if (params.EchConfigList)
+"
+    "				config.tls_ech_config = urldecode(params.EchConfigList);"
+)
+assert old in content, 'Trojan ECH anchor not found'
 content = content.replace(old, new, 1)
-print("P5 Trojan ECH: OK")
+print('P5 Trojan ECH: OK')
 
 with open(path, 'w', encoding='utf-8') as f:
     f.write(content)
@@ -407,5 +476,6 @@ PYEOF
 else
 	echo "P5 ECH import: SKIP"
 fi
+
 
 echo "=== done ==="
