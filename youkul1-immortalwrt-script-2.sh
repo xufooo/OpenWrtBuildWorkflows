@@ -146,6 +146,89 @@ config ruleset 'gfw'
 	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-gfw.srs'
 	option update_interval '72h'
 	option enabled '1'
+# -- Streaming / AI --
+config ruleset 'openai'
+	option label 'OpenAI / ChatGPT'
+	option type 'remote'
+	option format 'binary'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-openai.srs'
+	option update_interval '72h'
+	option enabled '1'
+
+config ruleset 'netflix'
+	option label 'Netflix'
+	option type 'remote'
+	option format 'binary'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-netflix.srs'
+	option update_interval '72h'
+	option enabled '1'
+
+config ruleset 'disney'
+	option label 'Disney+'
+	option type 'remote'
+	option format 'binary'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-disney.srs'
+	option update_interval '72h'
+	option enabled '1'
+
+config ruleset 'spotify'
+	option label 'Spotify'
+	option type 'remote'
+	option format 'binary'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-spotify.srs'
+	option update_interval '72h'
+	option enabled '1'
+
+config ruleset 'youtube'
+	option label 'YouTube'
+	option type 'remote'
+	option format 'binary'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-youtube.srs'
+	option update_interval '72h'
+	option enabled '1'
+
+# -- Social / Messaging --
+config ruleset 'telegram'
+	option label 'Telegram'
+	option type 'remote'
+	option format 'binary'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-telegram.srs'
+	option update_interval '72h'
+	option enabled '1'
+
+config ruleset 'twitter'
+	option label 'Twitter / X'
+	option type 'remote'
+	option format 'binary'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-twitter.srs'
+	option update_interval '72h'
+	option enabled '1'
+
+config ruleset 'tiktok'
+	option label 'TikTok'
+	option type 'remote'
+	option format 'binary'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-tiktok.srs'
+	option update_interval '72h'
+	option enabled '1'
+
+config ruleset 'github'
+	option label 'GitHub'
+	option type 'remote'
+	option format 'binary'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-github.srs'
+	option update_interval '72h'
+	option enabled '1'
+
+# -- Ad Blocking --
+config ruleset 'ads'
+	option label 'Ad Blocking'
+	option type 'remote'
+	option format 'binary'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-category-ads.srs'
+	option update_interval '72h'
+	option enabled '1'
+
 
 # ── DNS Rules ───────────────────────────────────────────────────────
 #  Matched top-to-bottom, first win.
@@ -175,6 +258,12 @@ config dns_rule
 
 #  Catch-all → remote DNS
 config dns_rule
+	option label 'Ads -> Block (DNS)'
+	option enabled '1'
+	list rule_set 'ads'
+	option action 'reject'
+
+config dns_rule
 	option label 'Default -> Remote DNS'
 	option enabled '1'
 	option action 'route'
@@ -184,14 +273,87 @@ config dns_rule
 #  Matched top-to-bottom, first win.
 #  CN IP ranges → direct (bypass proxy)
 config routing_rule
+	option label 'Ads -> Block'
+	option enabled '1'
+	list rule_set 'ads'
+	option action 'reject'
+
+config routing_rule
+	option label 'BT/P2P -> Block'
+	option enabled '1'
+	list protocol 'bittorrent'
+	option action 'reject'
+
+config routing_rule
 	option label 'CN IP -> Direct'
 	option enabled '1'
 	list rule_set 'cn-ip'
 	option action 'route'
 	option outbound 'direct-out'
 
-#  Catch-all → proxy
-#  → change outbound to 'proxy-out' after creating the routing_node!
+config routing_rule
+	option label 'OpenAI -> (Proxy)'
+	option enabled '1'
+	list rule_set 'openai'
+	option action 'route'
+	option outbound 'direct-out'
+
+config routing_rule
+	option label 'Netflix -> (Proxy)'
+	option enabled '1'
+	list rule_set 'netflix'
+	option action 'route'
+	option outbound 'direct-out'
+
+config routing_rule
+	option label 'Disney+ -> (Proxy)'
+	option enabled '1'
+	list rule_set 'disney'
+	option action 'route'
+	option outbound 'direct-out'
+
+config routing_rule
+	option label 'Spotify -> (Proxy)'
+	option enabled '1'
+	list rule_set 'spotify'
+	option action 'route'
+	option outbound 'direct-out'
+
+config routing_rule
+	option label 'YouTube -> (Proxy)'
+	option enabled '1'
+	list rule_set 'youtube'
+	option action 'route'
+	option outbound 'direct-out'
+
+config routing_rule
+	option label 'Telegram -> (Proxy)'
+	option enabled '1'
+	list rule_set 'telegram'
+	option action 'route'
+	option outbound 'direct-out'
+
+config routing_rule
+	option label 'Twitter/X -> (Proxy)'
+	option enabled '1'
+	list rule_set 'twitter'
+	option action 'route'
+	option outbound 'direct-out'
+
+config routing_rule
+	option label 'TikTok -> (Proxy)'
+	option enabled '1'
+	list rule_set 'tiktok'
+	option action 'route'
+	option outbound 'direct-out'
+
+config routing_rule
+	option label 'GitHub -> (Proxy)'
+	option enabled '1'
+	list rule_set 'github'
+	option action 'route'
+	option outbound 'direct-out'
+
 config routing_rule
 	option label 'Default -> Proxy'
 	option enabled '1'
