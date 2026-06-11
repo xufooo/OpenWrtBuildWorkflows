@@ -16,6 +16,10 @@ echo "=== script-2 ==="
 rm -rf feeds/smpackage/miniupnpd-iptables package/feeds/smpackage/miniupnpd-iptables
 
 CONF_PATH="feeds/smpackage/luci-app-homeproxy/root/etc/config/homeproxy"
+
+# Fix default_server: template uses 114_dns, not the upstream default local-dns
+sed -i "s/option default_server 'local-dns'/option default_server '114_dns'/" "$CONF_PATH"
+
 if grep -q 'HP_TEMPLATE' "$CONF_PATH" 2>/dev/null; then
 	echo "Template already present, skip"
 else
