@@ -109,14 +109,14 @@ config dns_server 'backup-dns'
 	option outbound 'direct-out'
 	option enabled '1'
 
-#  remote-dns: Cloudflare DoT for foreign domains (anti-pollution)
+#  remote-dns: Cloudflare DoH for foreign domains (anti-pollution)
 #  → change outbound to 'proxy-out' after creating the routing_node!
 config dns_server 'remote-dns'
 	option label 'Remote DNS (Proxy)'
-	option type 'tcp'
-	option server '1.1.1.1'
-	option server_port '853'
-	option tls_sni 'cloudflare-dns.com'
+	option type 'https'
+	option server 'cloudflare-dns.com'
+	option server_port '443'
+	option path '/dns-query'
 	option outbound 'direct-out'
 	option address_resolver 'default-dns'
 	option enabled '1'
