@@ -21,26 +21,8 @@ if grep -q 'HP_TEMPLATE' "$CONF_PATH" 2>/dev/null; then
 else
 	cat >> "$CONF_PATH" << 'CONFEOF'
 
-#
-# ═══════════════════════════════════════════════════════════════════════
-#  Custom Routing Template -- PassWall-Style Shunt Rules
-# ═══════════════════════════════════════════════════════════════════════
-#
-#  Quick start:
-#    1. Nodes tab         -> add your proxy node(s)
-#    2. Routing Nodes tab -> proxy_out URLTest picks best node
-#    3. Start the service.
-#
-#  Shunt categories (matching PassWall):
-#    Direct     -> CN IPs + private IPs -> direct
-#    ProxyGame  -> category-games -> proxy
-#    AIGC       -> AI services + Apple Intelligence -> proxy
-#    Streaming  -> Netflix / Disney / YouTube / Spotify -> proxy
-#    Proxy      -> non-CN sites + social / messenger / GFW -> proxy
-#
 # HP_TEMPLATE -- do not remove this line
 
-# ── Routing Node ─────────────────────────────────────────────────────
 config routing_node 'proxy_out'
 	option label 'Main Proxy'
 	option enabled '1'
@@ -48,7 +30,6 @@ config routing_node 'proxy_out'
 	option domain_resolver 'default-dns'
 	option domain_strategy 'prefer_ipv4'
 
-# ── DNS Servers ─────────────────────────────────────────────────────
 config dns_server '114_dns'
 	option label '114 DNS'
 	option type 'udp'
@@ -85,7 +66,6 @@ config dns_server 'google_dns'
 	option address_resolver 'default-dns'
 	option enabled '1'
 
-# ── Rule Sets ───────────────────────────────────────────────────────
 config ruleset 'cn_domain'
 	option label 'CN Domains'
 	option type 'remote'
@@ -230,7 +210,6 @@ config ruleset 'games'
 	option update_interval '72h'
 	option enabled '1'
 
-# ── DNS Rules ───────────────────────────────────────────────────────
 config dns_rule
 	option label 'Block SVCB/HTTPS'
 	option enabled '1'
@@ -264,5 +243,124 @@ config dns_rule
 	option action 'route'
 	option server 'google_dns'
 
-# ── Routing Rules ───────────────────────────────────────────────────
-config 
+config routing_rule
+	option label 'Ads -> Block'
+	option enabled '1'
+	list rule_set 'ads'
+	option action 'reject'
+
+config routing_rule
+	option label 'BT/P2P -> Block'
+	option enabled '1'
+	list protocol 'bittorrent'
+	option action 'reject'
+
+config routing_rule
+	option label 'CN IP -> Direct'
+	option enabled '1'
+	list rule_set 'cn_ip'
+	option action 'route'
+	option outbound 'direct-out'
+
+config routing_rule
+	option label 'Private IP -> Direct'
+	option enabled '1'
+	list rule_set 'private_ip'
+	option action 'route'
+	option outbound 'direct-out'
+
+config routing_rule
+	option label 'Games -> Proxy'
+	option enabled '1'
+	list rule_set 'games'
+	option action 'route'
+	option outbound 'proxy_out'
+
+config routing_rule
+	option label 'AI -> Proxy'
+	option enabled '1'
+	list rule_set 'ai_services'
+	list rule_set 'apple_ai'
+	option action 'route'
+	option outbound 'proxy_out'
+
+config routing_rule
+	option label 'Netflix -> Proxy'
+	option enabled '1'
+	list rule_set 'netflix'
+	option action 'route'
+	option outbound 'proxy_out'
+
+config routing_rule
+	option label 'Disney+ -> Proxy'
+	option enabled '1'
+	list rule_set 'disney'
+	option action 'route'
+	option outbound 'proxy_out'
+
+config routing_rule
+	option label 'YouTube -> Proxy'
+	option enabled '1'
+	list rule_set 'youtube'
+	option action 'route'
+	option outbound 'proxy_out'
+
+config routing_rule
+	option label 'Spotify -> Proxy'
+	option enabled '1'
+	list rule_set 'spotify'
+	option action 'route'
+	option outbound 'proxy_out'
+
+config routing_rule
+	option label 'Telegram -> Proxy'
+	option enabled '1'
+	list rule_set 'telegram'
+	option action 'route'
+	option outbound 'proxy_out'
+
+config routing_rule
+	option label 'Twitter/X -> Proxy'
+	option enabled '1'
+	list rule_set 'twitter'
+	option action 'route'
+	option outbound 'proxy_out'
+
+config routing_rule
+	option label 'TikTok -> Proxy'
+	option enabled '1'
+	list rule_set 'tiktok'
+	option action 'route'
+	option outbound 'proxy_out'
+
+config routing_rule
+	option label 'GitHub -> Proxy'
+	option enabled '1'
+	list rule_set 'github'
+	option action 'route'
+	option outbound 'proxy_out'
+
+config routing_rule
+	option label 'OpenAI -> Proxy'
+	option enabled '1'
+	list rule_set 'openai'
+	option action 'route'
+	option outbound 'proxy_out'
+
+config routing_rule
+	option label 'Non-CN -> Proxy'
+	option enabled '1'
+	list rule_set 'non_cn'
+	option action 'route'
+	option outbound 'proxy_out'
+
+config routing_rule
+	option label 'Default -> Proxy'
+	option enabled '1'
+	option action 'route'
+	option outbound 'proxy_out'
+CONFEOF
+	echo "Template appended"
+fi
+
+echo "=== done ==="
