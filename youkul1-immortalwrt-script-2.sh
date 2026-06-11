@@ -252,40 +252,40 @@ config dns_rule
 	option server 'tencent_dns'
 
 config routing_rule
-	option label 'Ads -> Block'
+	option label 'Ads'
 	option enabled '1'
 	list rule_set 'ads'
 	option action 'reject'
 
 config routing_rule
-	option label 'BT/P2P -> Block'
+	option label 'BT/P2P'
 	option enabled '1'
 	list protocol 'bittorrent'
 	option action 'reject'
 
 config routing_rule
-	option label 'CN IP -> Direct'
+	option label 'CN IP'
 	option enabled '1'
 	list rule_set 'cn_ip'
 	option action 'route'
 	option outbound 'direct-out'
 
 config routing_rule
-	option label 'Private IP -> Direct'
+	option label 'Private IP'
 	option enabled '1'
 	list rule_set 'private_ip'
 	option action 'route'
 	option outbound 'direct-out'
 
 config routing_rule
-	option label 'Games -> Proxy'
+	option label 'Games'
 	option enabled '1'
 	list rule_set 'games'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'AI -> Proxy'
+	option label 'AI'
 	option enabled '1'
 	list rule_set 'ai_services'
 	list rule_set 'apple_ai'
@@ -293,77 +293,77 @@ config routing_rule
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'Netflix -> Proxy'
+	option label 'Netflix'
 	option enabled '1'
 	list rule_set 'netflix'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'Disney+ -> Proxy'
+	option label 'Disney+'
 	option enabled '1'
 	list rule_set 'disney'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'YouTube -> Proxy'
+	option label 'YouTube'
 	option enabled '1'
 	list rule_set 'youtube'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'Spotify -> Proxy'
+	option label 'Spotify'
 	option enabled '1'
 	list rule_set 'spotify'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'Telegram -> Proxy'
+	option label 'Telegram'
 	option enabled '1'
 	list rule_set 'telegram'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'Twitter/X -> Proxy'
+	option label 'Twitter/X'
 	option enabled '1'
 	list rule_set 'twitter'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'TikTok -> Proxy'
+	option label 'TikTok'
 	option enabled '1'
 	list rule_set 'tiktok'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'GitHub -> Proxy'
+	option label 'GitHub'
 	option enabled '1'
 	list rule_set 'github'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'OpenAI -> Proxy'
+	option label 'OpenAI'
 	option enabled '1'
 	list rule_set 'openai'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'Non-CN -> Proxy'
+	option label 'Non-CN'
 	option enabled '1'
 	list rule_set 'non_cn'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'Default -> Direct'
+	option label 'Default'
 	option enabled '1'
 	option action 'route'
 	option outbound 'direct-out'
