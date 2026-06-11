@@ -9,7 +9,6 @@
 #
 # 1. Remove smpackage miniupnpd-iptables (conflict with official nftables variant)
 # 2. Append custom-mode routing template (idempotent, HP_TEMPLATE guarded)
-# 3. P5: ECH import support for VLESS/Trojan subscription share links
 
 set -euo pipefail
 echo "=== script-2 ==="
@@ -17,6 +16,7 @@ echo "=== script-2 ==="
 rm -rf feeds/smpackage/miniupnpd-iptables package/feeds/smpackage/miniupnpd-iptables
 
 CONF_PATH="feeds/smpackage/luci-app-homeproxy/root/etc/config/homeproxy"
+
 if grep -q 'HP_TEMPLATE' "$CONF_PATH" 2>/dev/null; then
 	echo "Template already present, skip"
 else
@@ -31,8 +31,8 @@ config routing_node 'proxy_out'
 	option domain_resolver 'default-dns'
 	option domain_strategy 'prefer_ipv4'
 
-config dns_server '114_dns'
-	option label '114 DNS'
+config dns_server 'local_dns'
+	option label 'Local DNS (CN)'
 	option type 'udp'
 	option server '114.114.114.114'
 	option server_port '53'
@@ -236,7 +236,7 @@ config dns_rule
 	option enabled '1'
 	list rule_set 'cn_domain'
 	option action 'route'
-	option server '114_dns'
+	option server 'local_dns'
 
 config dns_rule
 	option label 'Non-CN -> Google DoH'
@@ -246,47 +246,46 @@ config dns_rule
 	option server 'google_dns'
 
 config dns_rule
-	option label 'Default -> Tencent DNS'
+	option label 'Default -> 114 DNS'
 	option enabled '1'
 	option action 'route'
-	option server 'tencent_dns'
+	option server 'local_dns'
 
 config routing_rule
-	option label 'Ads'
+	option label 'Ads -> Block'
 	option enabled '1'
 	list rule_set 'ads'
 	option action 'reject'
 
 config routing_rule
-	option label 'BT/P2P'
+	option label 'BT/P2P -> Block'
 	option enabled '1'
 	list protocol 'bittorrent'
-	option action 'route'
-	option outbound 'direct-out'
+	option action 'reject'
 
 config routing_rule
-	option label 'CN IP'
+	option label 'CN IP -> Direct'
 	option enabled '1'
 	list rule_set 'cn_ip'
 	option action 'route'
 	option outbound 'direct-out'
 
 config routing_rule
-	option label 'Private IP'
+	option label 'Private IP -> Direct'
 	option enabled '1'
 	list rule_set 'private_ip'
 	option action 'route'
 	option outbound 'direct-out'
 
 config routing_rule
-	option label 'Games'
+	option label 'Games -> Proxy'
 	option enabled '1'
 	list rule_set 'games'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'AI'
+	option label 'AI -> Proxy'
 	option enabled '1'
 	list rule_set 'ai_services'
 	list rule_set 'apple_ai'
@@ -294,118 +293,82 @@ config routing_rule
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'Netflix'
+	option label 'Netflix -> Proxy'
 	option enabled '1'
 	list rule_set 'netflix'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'Disney+'
+	option label 'Disney+ -> Proxy'
 	option enabled '1'
 	list rule_set 'disney'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'YouTube'
+	option label 'YouTube -> Proxy'
 	option enabled '1'
 	list rule_set 'youtube'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'Spotify'
+	option label 'Spotify -> Proxy'
 	option enabled '1'
 	list rule_set 'spotify'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'Telegram'
+	option label 'Telegram -> Proxy'
 	option enabled '1'
 	list rule_set 'telegram'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'Twitter/X'
+	option label 'Twitter/X -> Proxy'
 	option enabled '1'
 	list rule_set 'twitter'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'TikTok'
+	option label 'TikTok -> Proxy'
 	option enabled '1'
 	list rule_set 'tiktok'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'GitHub'
+	option label 'GitHub -> Proxy'
 	option enabled '1'
 	list rule_set 'github'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'OpenAI'
+	option label 'OpenAI -> Proxy'
 	option enabled '1'
 	list rule_set 'openai'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'Non-CN'
+	option label 'Non-CN -> Proxy'
 	option enabled '1'
 	list rule_set 'non_cn'
 	option action 'route'
 	option outbound 'proxy_out'
 
 config routing_rule
-	option label 'Default'
+	option label 'Default -> Direct'
 	option enabled '1'
 	option action 'route'
 	option outbound 'direct-out'
-CONFEOF
+
 	echo "Template appended"
-fi
-
-# ===========================================================================
-# P5: ECH import support for VLESS/Trojan subscription share links
-# ===========================================================================
-NODEJS_PATH="feeds/smpackage/luci-app-homeproxy/htdocs/luci-static/resources/view/homeproxy/node.js"
-
-if [ -f "$NODEJS_PATH" ] && command -v python3 >/dev/null 2>&1; then
-	python3 << 'PYEOF'
-import sys
-
-path = "feeds/smpackage/luci-app-homeproxy/htdocs/luci-static/resources/view/homeproxy/node.js"
-with open(path, 'r', encoding='utf-8') as f:
-    content = f.read()
-
-# VLess ECH: insert after vless_flow line, before closing };
-old = "\t\t\t\tvless_flow: ['tls', 'reality'].includes(params.get('security')) ? params.get('flow') : null\n\t\t\t};"
-new = "\t\t\t\tvless_flow: ['tls', 'reality'].includes(params.get('security')) ? params.get('flow') : null,\n\t\t\t\ttls_ech: (params.get('security') === 'ech') ? '1' : '0',\n\t\t\t\ttls_ech_config: params.get('EchConfigList') ? decodeURIComponent(params.get('EchConfigList')) : null\n\t\t\t};"
-assert old in content, "VLess ECH anchor not found"
-content = content.replace(old, new, 1)
-print("P5 VLess ECH: OK")
-
-# Trojan ECH: insert after tls_sni line, before closing };
-old = "\t\t\ttls_sni: params.get('sni')\n\t\t\t};\n\t\t\tswitch (params.get('type')) {"
-new = "\t\t\ttls_sni: params.get('sni'),\n\t\t\ttls_ech: (params.get('security') === 'ech') ? '1' : '0',\n\t\t\ttls_ech_config: params.get('EchConfigList') ? decodeURIComponent(params.get('EchConfigList')) : null\n\t\t\t};\n\t\t\tswitch (params.get('type')) {"
-assert old in content, "Trojan ECH anchor not found"
-content = content.replace(old, new, 1)
-print("P5 Trojan ECH: OK")
-
-with open(path, 'w', encoding='utf-8') as f:
-    f.write(content)
-PYEOF
-
-	echo "P5 ECH import: done"
-else
-	echo "P5 ECH import: SKIP"
 fi
 
 echo "=== done ==="
