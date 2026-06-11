@@ -385,16 +385,16 @@ path = "feeds/smpackage/luci-app-homeproxy/htdocs/luci-static/resources/view/hom
 with open(path, 'r', encoding='utf-8') as f:
     content = f.read()
 
-# VLess ECH: insert after vless_flow line, before closing };
+# VLess ECH: support both standard (security=ech+EchConfigList) and edgetunnel (ech=SNI+DNS) formats
 old = "\t\t\t\tvless_flow: ['tls', 'reality'].includes(params.get('security')) ? params.get('flow') : null\n\t\t\t};"
-new = "\t\t\t\tvless_flow: ['tls', 'reality'].includes(params.get('security')) ? params.get('flow') : null,\n\t\t\t\ttls_ech: (params.get('security') === 'ech') ? '1' : '0',\n\t\t\t\ttls_ech_config: params.get('EchConfigList') ? decodeURIComponent(params.get('EchConfigList')) : null\n\t\t\t};"
+new = "\t\t\t\tvless_flow: ['tls', 'reality'].includes(params.get('security')) ? params.get('flow') : null,\n\t\t\t\ttls_ech: (params.get('security') === 'ech') ? '1' : '0',\n\t\t\t\ttls_ech_config: params.get('EchConfigList') ? decodeURIComponent(params.get('EchConfigList')) : null\n\t\t\t};\n\n\t\t\t// edgetunnel ECH: &ech=SNI+base64DNS\n\t\t\tconst echParam = params.get('ech');\n\t\t\tif (echParam && !config.tls_ech) {\n\t\t\t\tconst parts = echParam.split('+');\n\t\t\t\tif (parts.length >= 2) {\n\t\t\t\t\tconfig.tls_ech = '1';\n\t\t\t\t\tconfig.tls_ech_config = decodeURIComponent(parts.slice(1).join('+'));\n\t\t\t\t\tconfig.tls_sni = decodeURIComponent(parts[0]);\n\t\t\t\t}\n\t\t\t}"
 assert old in content, "VLess ECH anchor not found"
 content = content.replace(old, new, 1)
 print("P5 VLess ECH: OK")
 
-# Trojan ECH: insert after tls_sni line, before closing };
+# Trojan ECH: support both standard and edgetunnel formats
 old = "\t\t\ttls_sni: params.get('sni')\n\t\t\t};\n\t\t\tswitch (params.get('type')) {"
-new = "\t\t\ttls_sni: params.get('sni'),\n\t\t\ttls_ech: (params.get('security') === 'ech') ? '1' : '0',\n\t\t\ttls_ech_config: params.get('EchConfigList') ? decodeURIComponent(params.get('EchConfigList')) : null\n\t\t\t};\n\t\t\tswitch (params.get('type')) {"
+new = "\t\t\ttls_sni: params.get('sni'),\n\t\t\ttls_ech: (params.get('security') === 'ech') ? '1' : '0',\n\t\t\ttls_ech_config: params.get('EchConfigList') ? decodeURIComponent(params.get('EchConfigList')) : null\n\t\t\t};\n\n\t\t\t// edgetunnel ECH: &ech=SNI+base64DNS\n\t\t\tconst echParam = params.get('ech');\n\t\t\tif (echParam && !config.tls_ech) {\n\t\t\t\tconst parts = echParam.split('+');\n\t\t\t\tif (parts.length >= 2) {\n\t\t\t\t\tconfig.tls_ech = '1';\n\t\t\t\t\tconfig.tls_ech_config = decodeURIComponent(parts.slice(1).join('+'));\n\t\t\t\t\tconfig.tls_sni = decodeURIComponent(parts[0]);\n\t\t\t\t}\n\t\t\t}\n\t\t\tswitch (params.get('type')) {"
 assert old in content, "Trojan ECH anchor not found"
 content = content.replace(old, new, 1)
 print("P5 Trojan ECH: OK")
