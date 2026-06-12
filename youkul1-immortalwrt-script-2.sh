@@ -542,22 +542,7 @@ fetch_code = base64.b64decode("CS8qIEZldGNoIEVDSCBQRU0gZnJvbSBBbGlETlMgRG9IIGZvc
 fetch_call = fetch_code
 
 # Add urltest_nodes auto-sync after node processing
-sync_code = '	/* Sync urltest_nodes in routing_node entries with subscription nodes */
-'     '	uci.foreach(uciconfig, 'routing_node', (rcfg) => {
-'     '		if (rcfg.enabled !== '1' || rcfg.node !== 'urltest')
-'     '			return;
-'     '		const rtag = rcfg['.name'];
-'     '		const new_list = [];
-'     '		uci.foreach(uciconfig, 'node', (ncfg) => {
-'     '			if (ncfg.grouphash && ncfg['.name'] && !~index(new_list, ncfg['.name']))
-'     '				push(new_list, ncfg['.name']);
-'     '		});
-'     '		system(['uci', 'delete', 'homeproxy.' + rtag + '.urltest_nodes']);
-'     '		map(new_list, (nid) => system(['uci', 'add_list', 'homeproxy.' + rtag + '.urltest_nodes=' + nid]));
-'     '		system(['uci', 'commit', 'homeproxy']);
-'     '		log(sprintf('Synced urltest_nodes for %s: %d nodes', rtag, length(new_list)));
-'     '	});
-'
+sync_code = base64.b64decode("CS8qIFN5bmMgdXJsdGVzdF9ub2RlcyBpbiByb3V0aW5nX25vZGUgZW50cmllcyB3aXRoIHN1YnNjcmlwdGlvbiBub2RlcyAqLwoJdWNpLmZvcmVhY2godWNpY29uZmlnLCAncm91dGluZ19ub2RlJywgKHJjZmcpID0+IHsKCQlpZiAocmNmZy5lbmFibGVkICE9PSAnMScgfHwgcmNmZy5ub2RlICE9PSAndXJsdGVzdCcpCgkJCXJldHVybjsKCQljb25zdCBydGFnID0gcmNmZ1snLm5hbWUnXTsKCQljb25zdCBuZXdfbGlzdCA9IFtdOwoJCXVjaS5mb3JlYWNoKHVjaWNvbmZpZywgJ25vZGUnLCAobmNmZykgPT4gewoJCQlpZiAobmNmZy5ncm91cGhhc2ggJiYgbmNmZ1snLm5hbWUnXSAmJiAhfmluZGV4KG5ld19saXN0LCBuY2ZnWycubmFtZSddKSkKCQkJCXB1c2gobmV3X2xpc3QsIG5jZmdbJy5uYW1lJ10pOwoJCX0pOwoJCXN5c3RlbShbJ3VjaScsICdkZWxldGUnLCAnaG9tZXByb3h5LicgKyBydGFnICsgJy51cmx0ZXN0X25vZGVzJ10pOwoJCW1hcChuZXdfbGlzdCwgKG5pZCkgPT4gc3lzdGVtKFsndWNpJywgJ2FkZF9saXN0JywgJ2hvbWVwcm94eS4nICsgcnRhZyArICcudXJsdGVzdF9ub2Rlcz0nICsgbmlkXSkpOwoJCXN5c3RlbShbJ3VjaScsICdjb21taXQnLCAnaG9tZXByb3h5J10pOwoJCWxvZyhzcHJpbnRmKCdTeW5jZWQgdXJsdGVzdF9ub2RlcyBmb3IgJXM6ICVkIG5vZGVzJywgcnRhZywgbGVuZ3RoKG5ld19saXN0KSkpOwoJfSk7Cg==").decode("utf-8")
 
 if sync_code not in content:
     content = content.replace(insert_marker, sync_code + insert_marker, 1)
