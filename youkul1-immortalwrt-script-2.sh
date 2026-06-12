@@ -510,7 +510,8 @@ function apply_ech_param(config, ech_param) {
 	config.tls = '1';
 	config.tls_ech = '1';
 	config.tls_ech_config_path = '/etc/homeproxy/ech_' + ech_sni + '.pem';
-	config.tls_ech_config = normalize_ech_config(substr(ech_param, sep + 1));
+	if (!match(substr(ech_param, sep + 1), /^https?:\/\//))
+		config.tls_ech_config = normalize_ech_config(substr(ech_param, sep + 1));
 }
 
 """
