@@ -539,73 +539,9 @@ print("P5c subscription VLess ECH: OK")
 
 # Add PEM refresh call in main() after node processing loop via ucode
 insert_marker = "if (isEmpty(node_result)) {"
-fetch_call = '	/* Fetch ECH PEM from AliDNS DoH for each unique ECH SNI */
-' \n    '	const ech_snis = [];
-' \n    '	/* Collect from newly parsed nodes */
-' \n    '	for (let nodes in node_result)
-' \n    '		map(nodes, (node) => {
-' \n    '			if (node.tls_ech_config_path) {
-' \n    '				const ech_m = match(node.tls_ech_config_path, /ech_([^\/]+)\.pem$/);
-' \n    '				if (ech_m && !~index(ech_snis, ech_m[1]))
-' \n    '					push(ech_snis, ech_m[1]);
-' \n    '			}
-' \n    '		});
-' \n    '	/* Also collect from existing UCI nodes */
-' \n    '	uci.foreach(uciconfig, '''node''', (ncfg) => {
-' \n    '		if (ncfg.tls_ech === '''1''' && ncfg.tls_ech_config_path) {
-' \n    '			const ech_m = match(ncfg.tls_ech_config_path, /ech_([^\/]+)\.pem$/);
-' \n    '			if (ech_m && !~index(ech_snis, ech_m[1]))
-' \n    '				push(ech_snis, ech_m[1]);
-' \n    '		}
-' \n    '	});
-' \n    '	/* Download PEM for each unique SNI */
-' \n    '	map(ech_snis, (ech_sni) => {
-' \n    '		try {
-' \n    '			const ech_doh = '''https://dns.alidns.com/resolve?name=''' + ech_sni + '''&type=HTTPS''';
-' \n    '			const ech_resp = wGET(ech_doh, '''sing-box/1.12''');
-' \n    '			if (!isEmpty(ech_resp)) {
-' \n    '				const ech_data = json(ech_resp);
-' \n    '				const ech_answers = ech_data.Answer || [];
-' \n    '				for (let ech_ans in ech_answers) {
-' \n    '					const ech_str = ech_ans.data || '''''';
-' \n    '					const ech_b64m = match(ech_str, /ech="([A-Za-z0-9+\/=]+)"/);
-' \n    '					if (ech_b64m) {
-' \n    '						const ech_pem = '''-----BEGIN ECH CONFIGS-----\n''' + ech_b64m[1] + '''\n-----END ECH CONFIGS-----''';
-' \n    '						const ech_f = open('''/etc/homeproxy/ech_''' + ech_sni + '''.pem''', '''w''');
-' \n    '						if (ech_f) {
-' \n    '							ech_f.write(ech_pem);
-' \n    '							ech_f.close();
-' \n    '							log('''ECH PEM updated for ''' + ech_sni + ''' (''' + length(ech_b64m[1]) + ''' bytes base64)''');
-' \n    '						}
-' \n    '						break;
-' \n    '					}
-' \n    '				}
-' \n    '			}
-' \n    '		} catch(ech_err) {
-' \n    '			log('''ECH PEM fetch failed for ''' + ech_sni + ''': ''' + ech_err);
-' \n    '		}
-' \n    '	});
-'
-
-# Add urltest_nodes auto-sync after node processing
-sync_code = (
-    '\t/* Sync urltest_nodes in routing_node entries with subscription nodes */\n'
-    '\tuci.foreach(uciconfig, '\''routing_node'\'', (rcfg) => {\n'
-    '\t\tif (rcfg.enabled !== '\''1'\'' || rcfg.node !== '\''urltest'\'')\n'
-    '\t\t\treturn;\n'
-    '\t\tconst rtag = rcfg['\''.name'\''];\n'
-    '\t\tconst new_list = [];\n'
-    '\t\tuci.foreach(uciconfig, '\''node'\'', (ncfg) => {\n'
-    '\t\t\tif (ncfg.grouphash && ncfg['\''.name'\''] && !~index(new_list, ncfg['\''.name'\'']))\n'
-    '\t\t\t\tpush(new_list, ncfg['\''.name'\'']);\n'
-    '\t\t});\n'
-    '\t\tsystem(['\''uci'\'', '\''delete'\'', '\''homeproxy.'\'' + rtag + '\''.urltest_nodes'\'']);\n'
-    '\t\tmap(new_list, (nid) => system(['\''uci'\'', '\''add_list'\'', '\''homeproxy.'\'' + rtag + '\''.urltest_nodes='\'' + nid]));\n'
-    '\t\tsystem(['\''uci'\'', '\''commit'\'', '\''homeproxy'\'']);\n'
-    '\t\tlog(sprintf('\''Synced urltest_nodes for %s: %d nodes'\'', rtag, length(new_list)));\n'
-    '\t});\n'
-)
-
+import base64
+fetch_code = base64.b64decode("CS8qIEZldGNoIEVDSCBQRU0gZnJvbSBBbGlETlMgRG9IIGZvciBlYWNoIHVuaXF1ZSBFQ0ggU05JICovCgljb25zdCBlY2hfc25pcyA9IFtdOwoJLyogQ29sbGVjdCBmcm9tIG5ld2x5IHBhcnNlZCBub2RlcyAqLwoJZm9yIChsZXQgbm9kZXMgaW4gbm9kZV9yZXN1bHQpCgkJbWFwKG5vZGVzLCAobm9kZSkgPT4gewoJCQlpZiAobm9kZS50bHNfZWNoX2NvbmZpZ19wYXRoKSB7CgkJCQljb25zdCBlY2hfbSA9IG1hdGNoKG5vZGUudGxzX2VjaF9jb25maWdfcGF0aCwgL2VjaF8oW15cL10rKVwucGVtJC8pOwoJCQkJaWYgKGVjaF9tICYmICF+aW5kZXgoZWNoX3NuaXMsIGVjaF9tWzFdKSkKCQkJCQlwdXNoKGVjaF9zbmlzLCBlY2hfbVsxXSk7CgkJCX0KCQl9KTsKCS8qIEFsc28gY29sbGVjdCBmcm9tIGV4aXN0aW5nIFVDSSBub2RlcyAqLwoJdWNpLmZvcmVhY2godWNpY29uZmlnLCAnbm9kZScsIChuY2ZnKSA9PiB7CgkJaWYgKG5jZmcudGxzX2VjaCA9PT0gJzEnICYmIG5jZmcudGxzX2VjaF9jb25maWdfcGF0aCkgewoJCQljb25zdCBlY2hfbSA9IG1hdGNoKG5jZmcudGxzX2VjaF9jb25maWdfcGF0aCwgL2VjaF8oW15cL10rKVwucGVtJC8pOwoJCQlpZiAoZWNoX20gJiYgIX5pbmRleChlY2hfc25pcywgZWNoX21bMV0pKQoJCQkJcHVzaChlY2hfc25pcywgZWNoX21bMV0pOwoJCX0KCX0pOwoJLyogRG93bmxvYWQgUEVNIGZvciBlYWNoIHVuaXF1ZSBTTkkgKi8KCW1hcChlY2hfc25pcywgKGVjaF9zbmkpID0+IHsKCQl0cnkgewoJCQljb25zdCBlY2hfZG9oID0gJ2h0dHBzOi8vZG5zLmFsaWRucy5jb20vcmVzb2x2ZT9uYW1lPScgKyBlY2hfc25pICsgJyZ0eXBlPUhUVFBTJzsKCQkJY29uc3QgZWNoX3Jlc3AgPSB3R0VUKGVjaF9kb2gsICdzaW5nLWJveC8xLjEyJyk7CgkJCWlmICghaXNFbXB0eShlY2hfcmVzcCkpIHsKCQkJCWNvbnN0IGVjaF9kYXRhID0ganNvbihlY2hfcmVzcCk7CgkJCQljb25zdCBlY2hfYW5zd2VycyA9IGVjaF9kYXRhLkFuc3dlciB8fCBbXTsKCQkJCWZvciAobGV0IGVjaF9hbnMgaW4gZWNoX2Fuc3dlcnMpIHsKCQkJCQljb25zdCBlY2hfc3RyID0gZWNoX2Fucy5kYXRhIHx8ICcnOwoJCQkJCWNvbnN0IGVjaF9iNjRtID0gbWF0Y2goZWNoX3N0ciwgL2VjaD0iKFtBLVphLXowLTkrXC89XSspIi8pOwoJCQkJCWlmIChlY2hfYjY0bSkgewoJCQkJCQljb25zdCBlY2hfcGVtID0gJy0tLS0tQkVHSU4gRUNIIENPTkZJR1MtLS0tLQonICsgZWNoX2I2NG1bMV0gKyAnCi0tLS0tRU5EIEVDSCBDT05GSUdTLS0tLS0nOwoJCQkJCQljb25zdCBlY2hfZiA9IG9wZW4oJy9ldGMvaG9tZXByb3h5L2VjaF8nICsgZWNoX3NuaSArICcucGVtJywgJ3cnKTsKCQkJCQkJaWYgKGVjaF9mKSB7CgkJCQkJCQllY2hfZi53cml0ZShlY2hfcGVtKTsKCQkJCQkJCWVjaF9mLmNsb3NlKCk7CgkJCQkJCQlsb2coJ0VDSCBQRU0gdXBkYXRlZCBmb3IgJyArIGVjaF9zbmkgKyAnICgnICsgbGVuZ3RoKGVjaF9iNjRtWzFdKSArICcgYnl0ZXMgYmFzZTY0KScpOwoJCQkJCQl9CgkJCQkJCWJyZWFrOwoJCQkJCX0KCQkJCX0KCQkJfQoJCX0gY2F0Y2goZWNoX2VycikgewoJCQlsb2coJ0VDSCBQRU0gZmV0Y2ggZmFpbGVkIGZvciAnICsgZWNoX3NuaSArICc6ICcgKyBlY2hfZXJyKTsKCQl9Cgl9KTsK").decode("utf-8")
+fetch_call = fetch_code
 if fetch_call not in content:
     content = content.replace(insert_marker, fetch_call + insert_marker, 1)
     print("P5c PEM refresh call: added (ucode)")
