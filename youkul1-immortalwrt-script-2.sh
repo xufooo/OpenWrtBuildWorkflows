@@ -376,10 +376,10 @@ fi
 # P5: ECH import support for VLESS/Trojan share links and subscriptions
 # ===========================================================================
 # Strategy for sing-box <=1.12.x (no query_server_name field):
-#   - Set tls_ech_config_path='/etc/homeproxy/ech.pem' on all ECH nodes
+#   - Set tls_ech_config_path='/etc/homeproxy/ech_<SNI>.pem' (dynamic per ECH SNI)
 #   - Keep tls_sni = Worker SNI (from share link sni= param) — not overwritten
 #   - PEM auto-fetched via ucode wGET() from AliDNS DoH at subscription update time
-#   - sing-box reads ech.pem at connect time -> ECH works via embedded PEM
+#   - PEM path derived from ech= SNI; PEM auto-fetched via ucode AliDNS DoH
 # ===========================================================================
 
 # ------------------------------------------------------------------
@@ -417,7 +417,7 @@ function applyECHParam(config, echParam) {
 
 \tconfig.tls = '1';
 \tconfig.tls_ech = '1';
-\tconfig.tls_ech_config_path = '/etc/homeproxy/ech.pem';
+\tconfig.tls_ech_config_path = '/etc/homeproxy/ech_' + decodeURIComponent(echParam.slice(0, sep)) + '.pem';
 }
 
 """
@@ -478,7 +478,7 @@ function apply_ech_param(config, ech_param) {
 
 \tconfig.tls = '1';
 \tconfig.tls_ech = '1';
-\tconfig.tls_ech_config_path = '/etc/homeproxy/ech.pem';
+\tconfig.tls_ech_config_path = '/etc/homeproxy/ech_' + decodeURIComponent(echParam.slice(0, sep)) + '.pem';
 }
 
 """
@@ -516,7 +516,7 @@ fetch_call = (
     '\t\t\t\tconst ech_m = match(ech_str, /ech="([A-Za-z0-9+\/=]+)"/);\n'
     '\t\t\t\tif (ech_m) {\n'
     '\t\t\t\t\tconst ech_pem = '\''-----BEGIN ECH CONFIGS-----\\n'\'' + ech_m[1] + '\''\\n-----END ECH CONFIGS-----'\'';\n'
-    '\t\t\t\t\tconst ech_f = open('\''/etc/homeproxy/ech.pem'\'', '\''w'\'');\n'
+    '\t\t\t\t\tconst ech_f = open('\''/etc/homeproxy/ech_'\'' + ech_sni + '\''.pem'\'', '\''w'\'');\n'
     '\t\t\t\t\tif (ech_f) {\n'
     '\t\t\t\t\t\tech_f.write(ech_pem);\n'
     '\t\t\t\t\t\tech_f.close();\n'
