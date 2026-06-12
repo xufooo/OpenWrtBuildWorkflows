@@ -540,6 +540,40 @@ insert_marker = "if (isEmpty(node_result)) {"
 import base64
 fetch_code = base64.b64decode("CS8qIEZldGNoIEVDSCBQRU0gZnJvbSBBbGlETlMgRG9IIGZvciBlYWNoIHVuaXF1ZSBFQ0ggU05JICovCgljb25zdCBlY2hfc25pcyA9IFtdOwoJLyogQ29sbGVjdCBmcm9tIG5ld2x5IHBhcnNlZCBub2RlcyAqLwoJZm9yIChsZXQgbm9kZXMgaW4gbm9kZV9yZXN1bHQpCgkJbWFwKG5vZGVzLCAobm9kZSkgPT4gewoJCQlpZiAobm9kZS50bHNfZWNoX2NvbmZpZ19wYXRoKSB7CgkJCQljb25zdCBlY2hfbSA9IG1hdGNoKG5vZGUudGxzX2VjaF9jb25maWdfcGF0aCwgL2VjaF8oW15cL10rKVwucGVtJC8pOwoJCQkJaWYgKGVjaF9tICYmICF+aW5kZXgoZWNoX3NuaXMsIGVjaF9tWzFdKSkKCQkJCQlwdXNoKGVjaF9zbmlzLCBlY2hfbVsxXSk7CgkJCX0KCQl9KTsKCS8qIEFsc28gY29sbGVjdCBmcm9tIGV4aXN0aW5nIFVDSSBub2RlcyAqLwoJdWNpLmZvcmVhY2godWNpY29uZmlnLCAnbm9kZScsIChuY2ZnKSA9PiB7CgkJaWYgKG5jZmcudGxzX2VjaCA9PT0gJzEnICYmIG5jZmcudGxzX2VjaF9jb25maWdfcGF0aCkgewoJCQljb25zdCBlY2hfbSA9IG1hdGNoKG5jZmcudGxzX2VjaF9jb25maWdfcGF0aCwgL2VjaF8oW15cL10rKVwucGVtJC8pOwoJCQlpZiAoZWNoX20gJiYgIX5pbmRleChlY2hfc25pcywgZWNoX21bMV0pKQoJCQkJcHVzaChlY2hfc25pcywgZWNoX21bMV0pOwoJCX0KCX0pOwoJLyogRG93bmxvYWQgUEVNIGZvciBlYWNoIHVuaXF1ZSBTTkkgKi8KCW1hcChlY2hfc25pcywgKGVjaF9zbmkpID0+IHsKCQl0cnkgewoJCQljb25zdCBlY2hfZG9oID0gJ2h0dHBzOi8vZG5zLmFsaWRucy5jb20vcmVzb2x2ZT9uYW1lPScgKyBlY2hfc25pICsgJyZ0eXBlPUhUVFBTJzsKCQkJY29uc3QgZWNoX3Jlc3AgPSB3R0VUKGVjaF9kb2gsICdzaW5nLWJveC8xLjEyJyk7CgkJCWlmICghaXNFbXB0eShlY2hfcmVzcCkpIHsKCQkJCWNvbnN0IGVjaF9kYXRhID0ganNvbihlY2hfcmVzcCk7CgkJCQljb25zdCBlY2hfYW5zd2VycyA9IGVjaF9kYXRhLkFuc3dlciB8fCBbXTsKCQkJCWZvciAobGV0IGVjaF9hbnMgaW4gZWNoX2Fuc3dlcnMpIHsKCQkJCQljb25zdCBlY2hfc3RyID0gZWNoX2Fucy5kYXRhIHx8ICcnOwoJCQkJCWNvbnN0IGVjaF9iNjRtID0gbWF0Y2goZWNoX3N0ciwgL2VjaD0iKFtBLVphLXowLTkrXC89XSspIi8pOwoJCQkJCWlmIChlY2hfYjY0bSkgewoJCQkJCQljb25zdCBlY2hfcGVtID0gJy0tLS0tQkVHSU4gRUNIIENPTkZJR1MtLS0tLQonICsgZWNoX2I2NG1bMV0gKyAnCi0tLS0tRU5EIEVDSCBDT05GSUdTLS0tLS0nOwoJCQkJCQljb25zdCBlY2hfZiA9IG9wZW4oJy9ldGMvaG9tZXByb3h5L2VjaF8nICsgZWNoX3NuaSArICcucGVtJywgJ3cnKTsKCQkJCQkJaWYgKGVjaF9mKSB7CgkJCQkJCQllY2hfZi53cml0ZShlY2hfcGVtKTsKCQkJCQkJCWVjaF9mLmNsb3NlKCk7CgkJCQkJCQlsb2coJ0VDSCBQRU0gdXBkYXRlZCBmb3IgJyArIGVjaF9zbmkgKyAnICgnICsgbGVuZ3RoKGVjaF9iNjRtWzFdKSArICcgYnl0ZXMgYmFzZTY0KScpOwoJCQkJCQl9CgkJCQkJCWJyZWFrOwoJCQkJCX0KCQkJCX0KCQkJfQoJCX0gY2F0Y2goZWNoX2VycikgewoJCQlsb2coJ0VDSCBQRU0gZmV0Y2ggZmFpbGVkIGZvciAnICsgZWNoX3NuaSArICc6ICcgKyBlY2hfZXJyKTsKCQl9Cgl9KTsK").decode("utf-8")
 fetch_call = fetch_code
+
+# Add urltest_nodes auto-sync after node processing
+sync_code = (
+    '	/* Sync urltest_nodes in routing_node entries with subscription nodes */
+'
+    '	uci.foreach(uciconfig, 'routing_node', (rcfg) => {
+'
+    '		if (rcfg.enabled !== '1' || rcfg.node !== 'urltest')
+'
+    '			return;
+'
+    '		const rtag = rcfg['.name'];
+'
+    '		const new_list = [];
+'
+    '		uci.foreach(uciconfig, 'node', (ncfg) => {
+'
+    '			if (ncfg.grouphash && ncfg['.name'] && !~index(new_list, ncfg['.name']))
+'
+    '				push(new_list, ncfg['.name']);
+'
+    '		});
+'
+    '		system(['uci', 'delete', 'homeproxy.' + rtag + '.urltest_nodes']);
+'
+    '		map(new_list, (nid) => system(['uci', 'add_list', 'homeproxy.' + rtag + '.urltest_nodes=' + nid]));
+'
+    '		system(['uci', 'commit', 'homeproxy']);
+'
+    '		log(sprintf('Synced urltest_nodes for %s: %d nodes', rtag, length(new_list)));
+'
+    '	});
+'
+)
 if fetch_call not in content:
     content = content.replace(insert_marker, fetch_call + insert_marker, 1)
     print("P5c PEM refresh call: added (ucode)")
