@@ -12,6 +12,9 @@
 # 3. P5: ECH import support for VLESS/Trojan share links and subscriptions
 
 set -euo pipefail
+
+# Strip CR inserted by Windows Git
+sed -i 's/$//' "$0"
 echo "=== script-2 ==="
 
 rm -rf feeds/smpackage/miniupnpd-iptables package/feeds/smpackage/miniupnpd-iptables
@@ -536,100 +539,53 @@ print("P5c subscription VLess ECH: OK")
 
 # Add PEM refresh call in main() after node processing loop via ucode
 insert_marker = "if (isEmpty(node_result)) {"
-fetch_call = (
-    '	/* Fetch ECH PEM from AliDNS DoH for each unique ECH SNI */
+fetch_call = '	/* Fetch ECH PEM from AliDNS DoH for each unique ECH SNI */
+' \n    '	const ech_snis = [];
+' \n    '	/* Collect from newly parsed nodes */
+' \n    '	for (let nodes in node_result)
+' \n    '		map(nodes, (node) => {
+' \n    '			if (node.tls_ech_config_path) {
+' \n    '				const ech_m = match(node.tls_ech_config_path, /ech_([^\/]+)\.pem$/);
+' \n    '				if (ech_m && !~index(ech_snis, ech_m[1]))
+' \n    '					push(ech_snis, ech_m[1]);
+' \n    '			}
+' \n    '		});
+' \n    '	/* Also collect from existing UCI nodes */
+' \n    '	uci.foreach(uciconfig, '''node''', (ncfg) => {
+' \n    '		if (ncfg.tls_ech === '''1''' && ncfg.tls_ech_config_path) {
+' \n    '			const ech_m = match(ncfg.tls_ech_config_path, /ech_([^\/]+)\.pem$/);
+' \n    '			if (ech_m && !~index(ech_snis, ech_m[1]))
+' \n    '				push(ech_snis, ech_m[1]);
+' \n    '		}
+' \n    '	});
+' \n    '	/* Download PEM for each unique SNI */
+' \n    '	map(ech_snis, (ech_sni) => {
+' \n    '		try {
+' \n    '			const ech_doh = '''https://dns.alidns.com/resolve?name=''' + ech_sni + '''&type=HTTPS''';
+' \n    '			const ech_resp = wGET(ech_doh, '''sing-box/1.12''');
+' \n    '			if (!isEmpty(ech_resp)) {
+' \n    '				const ech_data = json(ech_resp);
+' \n    '				const ech_answers = ech_data.Answer || [];
+' \n    '				for (let ech_ans in ech_answers) {
+' \n    '					const ech_str = ech_ans.data || '''''';
+' \n    '					const ech_b64m = match(ech_str, /ech="([A-Za-z0-9+\/=]+)"/);
+' \n    '					if (ech_b64m) {
+' \n    '						const ech_pem = '''-----BEGIN ECH CONFIGS-----\n''' + ech_b64m[1] + '''\n-----END ECH CONFIGS-----''';
+' \n    '						const ech_f = open('''/etc/homeproxy/ech_''' + ech_sni + '''.pem''', '''w''');
+' \n    '						if (ech_f) {
+' \n    '							ech_f.write(ech_pem);
+' \n    '							ech_f.close();
+' \n    '							log('''ECH PEM updated for ''' + ech_sni + ''' (''' + length(ech_b64m[1]) + ''' bytes base64)''');
+' \n    '						}
+' \n    '						break;
+' \n    '					}
+' \n    '				}
+' \n    '			}
+' \n    '		} catch(ech_err) {
+' \n    '			log('''ECH PEM fetch failed for ''' + ech_sni + ''': ''' + ech_err);
+' \n    '		}
+' \n    '	});
 '
-    '	const ech_snis = [];
-'
-    '	/* Collect from newly parsed nodes */
-'
-    '	for (let nodes in node_result)
-'
-    '		map(nodes, (node) => {
-'
-    '			if (node.tls_ech_config_path) {
-'
-    '				const ech_m = match(node.tls_ech_config_path, /ech_([^\/]+)\.pem$/);
-'
-    '				if (ech_m && !~index(ech_snis, ech_m[1]))
-'
-    '					push(ech_snis, ech_m[1]);
-'
-    '			}
-'
-    '		});
-'
-    '	/* Also collect from existing UCI nodes */
-'
-    '	uci.foreach(uciconfig, '''node''', (ncfg) => {
-'
-    '		if (ncfg.tls_ech === '''1''' && ncfg.tls_ech_config_path) {
-'
-    '			const ech_m = match(ncfg.tls_ech_config_path, /ech_([^\/]+)\.pem$/);
-'
-    '			if (ech_m && !~index(ech_snis, ech_m[1]))
-'
-    '				push(ech_snis, ech_m[1]);
-'
-    '		}
-'
-    '	});
-'
-    '	/* Download PEM for each unique SNI */
-'
-    '	map(ech_snis, (ech_sni) => {
-'
-    '		try {
-'
-    '			const ech_doh = '''https://dns.alidns.com/resolve?name=''' + ech_sni + '''&type=HTTPS''';
-'
-    '			const ech_resp = wGET(ech_doh, '''sing-box/1.12''');
-'
-    '			if (!isEmpty(ech_resp)) {
-'
-    '				const ech_data = json(ech_resp);
-'
-    '				const ech_answers = ech_data.Answer || [];
-'
-    '				for (let ech_ans in ech_answers) {
-'
-    '					const ech_str = ech_ans.data || '''''';
-'
-    '					const ech_b64m = match(ech_str, /ech="([A-Za-z0-9+\/=]+)"/);
-'
-    '					if (ech_b64m) {
-'
-    '						const ech_pem = '''-----BEGIN ECH CONFIGS-----\n''' + ech_b64m[1] + '''\n-----END ECH CONFIGS-----''';
-'
-    '						const ech_f = open('''/etc/homeproxy/ech_''' + ech_sni + '''.pem''', '''w''');
-'
-    '						if (ech_f) {
-'
-    '							ech_f.write(ech_pem);
-'
-    '							ech_f.close();
-'
-    '							log('''ECH PEM updated for ''' + ech_sni + ''' (''' + length(ech_b64m[1]) + ''' bytes base64)''');
-'
-    '						}
-'
-    '						break;
-'
-    '					}
-'
-    '				}
-'
-    '			}
-'
-    '		} catch(ech_err) {
-'
-    '			log('''ECH PEM fetch failed for ''' + ech_sni + ''': ''' + ech_err);
-'
-    '		}
-'
-    '	});
-'
-)
 
 # Add urltest_nodes auto-sync after node processing
 sync_code = (
