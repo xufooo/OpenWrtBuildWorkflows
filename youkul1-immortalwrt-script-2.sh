@@ -261,21 +261,21 @@ config dns_rule
 	option server 'cloudflare_dns'
 
 config dns_rule
-	option label 'CN -> 114 DNS'
+	option label 'CN'
 	option enabled '1'
 	list rule_set 'cn_domain'
 	option action 'route'
 	option server '114_dns'
 
 config dns_rule
-	option label 'Non-CN -> Google DoH'
+	option label 'Non-CN'
 	option enabled '1'
 	list rule_set 'non_cn'
 	option action 'route'
 	option server 'google_dns'
 
 config dns_rule
-	option label 'Default -> Tencent DNS'
+	option label 'Default'
 	option enabled '1'
 	option action 'route'
 	option server 'alidns'
