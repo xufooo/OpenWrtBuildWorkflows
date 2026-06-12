@@ -430,12 +430,17 @@ helper = """function normalizeECHConfig(value) {
 }
 
 function applyECHParam(config, echParam) {
-\tif (!echParam)
-\t\treturn;
+	if (!echParam)
+		return;
 
-\tconfig.tls = '1';
-\tconfig.tls_ech = '1';
-\tconfig.tls_ech_config_path = '/etc/homeproxy/ech_' + decodeURIComponent(echParam.slice(0, sep)) + '.pem';
+	const sep = echParam.includes("+") ? echParam.indexOf("+") : echParam.indexOf(" ");
+	if (sep <= 0)
+		return;
+
+	config.tls = '1';
+	config.tls_ech = '1';
+	config.tls_ech_config_path = '/etc/homeproxy/ech_' + decodeURIComponent(echParam.slice(0, sep)) + '.pem';
+	config.tls_ech_config = normalizeECHConfig(echParam.slice(sep + 1));
 }
 
 """
@@ -491,12 +496,21 @@ helper = """function normalize_ech_config(value) {
 }
 
 function apply_ech_param(config, ech_param) {
-\tif (isEmpty(ech_param))
-\t\treturn;
+	if (isEmpty(ech_param))
+		return;
 
-\tconfig.tls = '1';
-\tconfig.tls_ech = '1';
-\tconfig.tls_ech_config_path = '/etc/homeproxy/ech_' + decodeURIComponent(echParam.slice(0, sep)) + '.pem';
+	ech_param = urldecode(ech_param);
+	let sep = index(ech_param, "+");
+	if (sep < 0)
+		sep = index(ech_param, " ");
+	if (sep <= 0)
+		return;
+
+	const ech_sni = urldecode(substr(ech_param, 0, sep));
+	config.tls = '1';
+	config.tls_ech = '1';
+	config.tls_ech_config_path = '/etc/homeproxy/ech_' + ech_sni + '.pem';
+	config.tls_ech_config = normalize_ech_config(substr(ech_param, sep + 1));
 }
 
 """
@@ -522,31 +536,98 @@ print("P5c subscription VLess ECH: OK")
 # Add PEM refresh call in main() after node processing loop via ucode
 insert_marker = "if (isEmpty(node_result)) {"
 fetch_call = (
-    '\t/* Fetch ECH PEM from AliDNS DoH (sing-box 1.12.x compat) */\n'
-    '\ttry {\n'
-    '\t\tconst ech_doh = '\''https://dns.alidns.com/resolve?name=cloudflare-ech.com&type=HTTPS'\'';\n'
-    '\t\tconst ech_resp = wGET(ech_doh, '\''sing-box/1.12'\'');\n'
-    '\t\tif (!isEmpty(ech_resp)) {\n'
-    '\t\t\tconst ech_data = json(ech_resp);\n'
-    '\t\t\tconst ech_answers = ech_data.Answer || [];\n'
-    '\t\t\tfor (let ech_ans in ech_answers) {\n'
-    '\t\t\t\tconst ech_str = ech_ans.data || '\'''\'';\n'
-    '\t\t\t\tconst ech_m = match(ech_str, /ech="([A-Za-z0-9+\/=]+)"/);\n'
-    '\t\t\t\tif (ech_m) {\n'
-    '\t\t\t\t\tconst ech_pem = '\''-----BEGIN ECH CONFIGS-----\\n'\'' + ech_m[1] + '\''\\n-----END ECH CONFIGS-----'\'';\n'
-    '\t\t\t\t\tconst ech_f = open('\''/etc/homeproxy/ech_'\'' + ech_sni + '\''.pem'\'', '\''w'\'');\n'
-    '\t\t\t\t\tif (ech_f) {\n'
-    '\t\t\t\t\t\tech_f.write(ech_pem);\n'
-    '\t\t\t\t\t\tech_f.close();\n'
-    '\t\t\t\t\t\tlog('\''ECH PEM updated ('\'' + length(ech_m[1]) + '\'' bytes base64)'\'');\n'
-    '\t\t\t\t\t}\n'
-    '\t\t\t\t\tbreak;\n'
-    '\t\t\t\t}\n'
-    '\t\t\t}\n'
-    '\t\t}\n'
-    '\t} catch(ech_err) {\n'
-    '\t\tlog('\''ECH PEM fetch failed: '\'' + ech_err);\n'
-    '\t}\n'
+    '	/* Fetch ECH PEM from AliDNS DoH for each unique ECH SNI */
+'
+    '	const ech_snis = [];
+'
+    '	/* Collect from newly parsed nodes */
+'
+    '	for (let nodes in node_result)
+'
+    '		map(nodes, (node) => {
+'
+    '			if (node.tls_ech_config_path) {
+'
+    '				const ech_m = match(node.tls_ech_config_path, /ech_([^\/]+)\.pem$/);
+'
+    '				if (ech_m && !~index(ech_snis, ech_m[1]))
+'
+    '					push(ech_snis, ech_m[1]);
+'
+    '			}
+'
+    '		});
+'
+    '	/* Also collect from existing UCI nodes */
+'
+    '	uci.foreach(uciconfig, '''node''', (ncfg) => {
+'
+    '		if (ncfg.tls_ech === '''1''' && ncfg.tls_ech_config_path) {
+'
+    '			const ech_m = match(ncfg.tls_ech_config_path, /ech_([^\/]+)\.pem$/);
+'
+    '			if (ech_m && !~index(ech_snis, ech_m[1]))
+'
+    '				push(ech_snis, ech_m[1]);
+'
+    '		}
+'
+    '	});
+'
+    '	/* Download PEM for each unique SNI */
+'
+    '	map(ech_snis, (ech_sni) => {
+'
+    '		try {
+'
+    '			const ech_doh = '''https://dns.alidns.com/resolve?name=''' + ech_sni + '''&type=HTTPS''';
+'
+    '			const ech_resp = wGET(ech_doh, '''sing-box/1.12''');
+'
+    '			if (!isEmpty(ech_resp)) {
+'
+    '				const ech_data = json(ech_resp);
+'
+    '				const ech_answers = ech_data.Answer || [];
+'
+    '				for (let ech_ans in ech_answers) {
+'
+    '					const ech_str = ech_ans.data || '''''';
+'
+    '					const ech_b64m = match(ech_str, /ech="([A-Za-z0-9+\/=]+)"/);
+'
+    '					if (ech_b64m) {
+'
+    '						const ech_pem = '''-----BEGIN ECH CONFIGS-----\n''' + ech_b64m[1] + '''\n-----END ECH CONFIGS-----''';
+'
+    '						const ech_f = open('''/etc/homeproxy/ech_''' + ech_sni + '''.pem''', '''w''');
+'
+    '						if (ech_f) {
+'
+    '							ech_f.write(ech_pem);
+'
+    '							ech_f.close();
+'
+    '							log('''ECH PEM updated for ''' + ech_sni + ''' (''' + length(ech_b64m[1]) + ''' bytes base64)''');
+'
+    '						}
+'
+    '						break;
+'
+    '					}
+'
+    '				}
+'
+    '			}
+'
+    '		} catch(ech_err) {
+'
+    '			log('''ECH PEM fetch failed for ''' + ech_sni + ''': ''' + ech_err);
+'
+    '		}
+'
+    '	});
+'
 )
 
 # Add urltest_nodes auto-sync after node processing
