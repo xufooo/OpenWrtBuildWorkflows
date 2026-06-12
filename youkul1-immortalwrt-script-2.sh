@@ -502,50 +502,53 @@ content = content.replace(old, new, 1)
 print("P5c subscription VLess ECH: OK")
 
 # Add PEM refresh call in main() after node processing loop via ucode
-# Add PEM refresh call in main() after node processing loop via ucode
 insert_marker = "if (isEmpty(node_result)) {"
-fetch_call = '\t/* Fetch ECH PEM from AliDNS DoH (sing-box 1.12.x compat) */\n' \
-    '\ttry {\n' \
-    '\t\tconst ech_doh = '\''https://dns.alidns.com/resolve?name=cloudflare-ech.com&type=HTTPS'\'';\n' \
-    '\t\tconst ech_resp = wGET(ech_doh, '\''sing-box/1.12'\'');\n' \
-    '\t\tif (!isEmpty(ech_resp)) {\n' \
-    '\t\t\tconst ech_data = json(ech_resp);\n' \
-    '\t\t\tconst ech_answers = ech_data.Answer || [];\n' \
-    '\t\t\tfor (let ech_ans in ech_answers) {\n' \
-    '\t\t\t\tconst ech_str = ech_ans.data || '\'''\'';\n' \
-    '\t\t\t\tconst ech_m = match(ech_str, /ech="([A-Za-z0-9+\/=]+)"/);\n' \
-    '\t\t\t\tif (ech_m) {\n' \
-    '\t\t\t\t\tconst ech_pem = '\''-----BEGIN ECH CONFIGS-----\\n'\'' + ech_m[1] + '\''\\n-----END ECH CONFIGS-----'\'';\n' \
-    '\t\t\t\t\tconst ech_f = open('\''/etc/homeproxy/ech.pem'\'', '\''w'\'');\n' \
-    '\t\t\t\t\tif (ech_f) {\n' \
-    '\t\t\t\t\t\tech_f.write(ech_pem);\n' \
-    '\t\t\t\t\t\tech_f.close();\n' \
-    '\t\t\t\t\t\tlog('\''ECH PEM updated ('\'' + length(ech_m[1]) + '\'' bytes base64)'\'');\n' \
-    '\t\t\t\t\t}\n' \
-    '\t\t\t\t\tbreak;\n' \
-    '\t\t\t\t}\n' \
-    '\t\t\t}\n' \
-    '\t\t}\n' \
-    '\t} catch(ech_err) {\n' \
-    '\t\tlog('\''ECH PEM fetch failed: '\'' + ech_err);\n' \
+fetch_call = (
+    '\t/* Fetch ECH PEM from AliDNS DoH (sing-box 1.12.x compat) */\n'
+    '\ttry {\n'
+    '\t\tconst ech_doh = '\''https://dns.alidns.com/resolve?name=cloudflare-ech.com&type=HTTPS'\'';\n'
+    '\t\tconst ech_resp = wGET(ech_doh, '\''sing-box/1.12'\'');\n'
+    '\t\tif (!isEmpty(ech_resp)) {\n'
+    '\t\t\tconst ech_data = json(ech_resp);\n'
+    '\t\t\tconst ech_answers = ech_data.Answer || [];\n'
+    '\t\t\tfor (let ech_ans in ech_answers) {\n'
+    '\t\t\t\tconst ech_str = ech_ans.data || '\'''\'';\n'
+    '\t\t\t\tconst ech_m = match(ech_str, /ech="([A-Za-z0-9+\/=]+)"/);\n'
+    '\t\t\t\tif (ech_m) {\n'
+    '\t\t\t\t\tconst ech_pem = '\''-----BEGIN ECH CONFIGS-----\\n'\'' + ech_m[1] + '\''\\n-----END ECH CONFIGS-----'\'';\n'
+    '\t\t\t\t\tconst ech_f = open('\''/etc/homeproxy/ech.pem'\'', '\''w'\'');\n'
+    '\t\t\t\t\tif (ech_f) {\n'
+    '\t\t\t\t\t\tech_f.write(ech_pem);\n'
+    '\t\t\t\t\t\tech_f.close();\n'
+    '\t\t\t\t\t\tlog('\''ECH PEM updated ('\'' + length(ech_m[1]) + '\'' bytes base64)'\'');\n'
+    '\t\t\t\t\t}\n'
+    '\t\t\t\t\tbreak;\n'
+    '\t\t\t\t}\n'
+    '\t\t\t}\n'
+    '\t\t}\n'
+    '\t} catch(ech_err) {\n'
+    '\t\tlog('\''ECH PEM fetch failed: '\'' + ech_err);\n'
     '\t}\n'
+)
 
 # Add urltest_nodes auto-sync after node processing
-sync_code = '\t/* Sync urltest_nodes in routing_node entries with subscription nodes */\n' \
-    '\tuci.foreach(uciconfig, '\''routing_node'\'', (rcfg) => {\n' \
-    '\t\tif (rcfg.enabled !== '\''1'\'' || rcfg.node !== '\''urltest'\'')\n' \
-    '\t\t\treturn;\n' \
-    '\t\tconst rtag = rcfg['\''.name'\''];\n' \
-    '\t\tconst new_list = [];\n' \
-    '\t\tuci.foreach(uciconfig, '\''node'\'', (ncfg) => {\n' \
-    '\t\t\tif (ncfg.grouphash && ncfg['\''.name'\''] && !~index(new_list, ncfg['\''.name'\'']))\n' \
-    '\t\t\t\tpush(new_list, ncfg['\''.name'\'']);\n' \
-    '\t\t});\n' \
-    '\t\tsystem(['\''uci'\'', '\''delete'\'', '\''homeproxy.'\'' + rtag + '\''.urltest_nodes'\'']);\n' \
-    '\t\tmap(new_list, (nid) => system(['\''uci'\'', '\''add_list'\'', '\''homeproxy.'\'' + rtag + '\''.urltest_nodes='\'' + nid]));\n' \
-    '\t\tsystem(['\''uci'\'', '\''commit'\'', '\''homeproxy'\'']);\n' \
-    '\t\tlog(sprintf('\''Synced urltest_nodes for %s: %d nodes'\'', rtag, length(new_list)));\n' \
+sync_code = (
+    '\t/* Sync urltest_nodes in routing_node entries with subscription nodes */\n'
+    '\tuci.foreach(uciconfig, '\''routing_node'\'', (rcfg) => {\n'
+    '\t\tif (rcfg.enabled !== '\''1'\'' || rcfg.node !== '\''urltest'\'')\n'
+    '\t\t\treturn;\n'
+    '\t\tconst rtag = rcfg['\''.name'\''];\n'
+    '\t\tconst new_list = [];\n'
+    '\t\tuci.foreach(uciconfig, '\''node'\'', (ncfg) => {\n'
+    '\t\t\tif (ncfg.grouphash && ncfg['\''.name'\''] && !~index(new_list, ncfg['\''.name'\'']))\n'
+    '\t\t\t\tpush(new_list, ncfg['\''.name'\'']);\n'
+    '\t\t});\n'
+    '\t\tsystem(['\''uci'\'', '\''delete'\'', '\''homeproxy.'\'' + rtag + '\''.urltest_nodes'\'']);\n'
+    '\t\tmap(new_list, (nid) => system(['\''uci'\'', '\''add_list'\'', '\''homeproxy.'\'' + rtag + '\''.urltest_nodes='\'' + nid]));\n'
+    '\t\tsystem(['\''uci'\'', '\''commit'\'', '\''homeproxy'\'']);\n'
+    '\t\tlog(sprintf('\''Synced urltest_nodes for %s: %d nodes'\'', rtag, length(new_list)));\n'
     '\t});\n'
+)
 
 if fetch_call not in content:
     content = content.replace(insert_marker, fetch_call + insert_marker, 1)
