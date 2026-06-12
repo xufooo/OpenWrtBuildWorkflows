@@ -68,6 +68,16 @@ config dns_server 'google_dns'
 	option address_resolver '114_dns'
 	option enabled '1'
 
+config dns_server 'alidns'
+	option label 'AliDNS (DoH)'
+	option type 'https'
+	option server 'dns.alidns.com'
+	option server_port '443'
+	option path '/dns-query'
+	option outbound 'direct-out'
+	option address_resolver '114_dns'
+	option enabled '1'
+
 config ruleset 'cn_domain'
 	option label 'CN Domains'
 	option type 'remote'
@@ -238,17 +248,17 @@ config dns_rule
 	option action 'reject'
 
 config dns_rule
-	option label 'GFW -> CF DoH'
+	option label 'Ads Block (DNS)'
+	option enabled '1'
+	list rule_set 'ads'
+	option action 'reject'
+
+config dns_rule
+	option label 'GFW'
 	option enabled '1'
 	list rule_set 'gfw'
 	option action 'route'
 	option server 'cloudflare_dns'
-
-config dns_rule
-	option label 'Ads -> Block (DNS)'
-	option enabled '1'
-	list rule_set 'ads'
-	option action 'reject'
 
 config dns_rule
 	option label 'CN -> 114 DNS'
@@ -268,7 +278,7 @@ config dns_rule
 	option label 'Default -> Tencent DNS'
 	option enabled '1'
 	option action 'route'
-	option server 'tencent_dns'
+	option server 'alidns'
 
 config routing_rule
 	option label 'Ads'
