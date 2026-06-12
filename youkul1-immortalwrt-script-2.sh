@@ -542,43 +542,22 @@ fetch_code = base64.b64decode("CS8qIEZldGNoIEVDSCBQRU0gZnJvbSBBbGlETlMgRG9IIGZvc
 fetch_call = fetch_code
 
 # Add urltest_nodes auto-sync after node processing
-sync_code = (
-    '	/* Sync urltest_nodes in routing_node entries with subscription nodes */
+sync_code = '	/* Sync urltest_nodes in routing_node entries with subscription nodes */
+'     '	uci.foreach(uciconfig, 'routing_node', (rcfg) => {
+'     '		if (rcfg.enabled !== '1' || rcfg.node !== 'urltest')
+'     '			return;
+'     '		const rtag = rcfg['.name'];
+'     '		const new_list = [];
+'     '		uci.foreach(uciconfig, 'node', (ncfg) => {
+'     '			if (ncfg.grouphash && ncfg['.name'] && !~index(new_list, ncfg['.name']))
+'     '				push(new_list, ncfg['.name']);
+'     '		});
+'     '		system(['uci', 'delete', 'homeproxy.' + rtag + '.urltest_nodes']);
+'     '		map(new_list, (nid) => system(['uci', 'add_list', 'homeproxy.' + rtag + '.urltest_nodes=' + nid]));
+'     '		system(['uci', 'commit', 'homeproxy']);
+'     '		log(sprintf('Synced urltest_nodes for %s: %d nodes', rtag, length(new_list)));
+'     '	});
 '
-    '	uci.foreach(uciconfig, 'routing_node', (rcfg) => {
-'
-    '		if (rcfg.enabled !== '1' || rcfg.node !== 'urltest')
-'
-    '			return;
-'
-    '		const rtag = rcfg['.name'];
-'
-    '		const new_list = [];
-'
-    '		uci.foreach(uciconfig, 'node', (ncfg) => {
-'
-    '			if (ncfg.grouphash && ncfg['.name'] && !~index(new_list, ncfg['.name']))
-'
-    '				push(new_list, ncfg['.name']);
-'
-    '		});
-'
-    '		system(['uci', 'delete', 'homeproxy.' + rtag + '.urltest_nodes']);
-'
-    '		map(new_list, (nid) => system(['uci', 'add_list', 'homeproxy.' + rtag + '.urltest_nodes=' + nid]));
-'
-    '		system(['uci', 'commit', 'homeproxy']);
-'
-    '		log(sprintf('Synced urltest_nodes for %s: %d nodes', rtag, length(new_list)));
-'
-    '	});
-'
-)
-if fetch_call not in content:
-    content = content.replace(insert_marker, fetch_call + insert_marker, 1)
-    print("P5c PEM refresh call: added (ucode)")
-else:
-    print("P5c PEM refresh call: already present")
 
 if sync_code not in content:
     content = content.replace(insert_marker, sync_code + insert_marker, 1)
