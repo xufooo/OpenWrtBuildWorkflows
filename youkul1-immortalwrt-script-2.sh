@@ -13,8 +13,6 @@
 
 set -euo pipefail
 
-# Strip CR inserted by Windows Git
-sed -i 's/$//' "$0"
 echo "=== script-2 ==="
 
 rm -rf feeds/smpackage/miniupnpd-iptables package/feeds/smpackage/miniupnpd-iptables
