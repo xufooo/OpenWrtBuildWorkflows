@@ -378,40 +378,13 @@ fi
 # Strategy for sing-box <=1.12.x (no query_server_name field):
 #   - Set tls_ech_config_path='/etc/homeproxy/ech.pem' on all ECH nodes
 #   - Keep tls_sni = Worker SNI (from share link sni= param) — not overwritten
-#   - Deploy update_ech_pem.sh to refresh the PEM file daily
+#   - PEM auto-fetched via ucode wGET() from AliDNS DoH at subscription update time
 #   - sing-box reads ech.pem at connect time -> ECH works via embedded PEM
 # ===========================================================================
 
 # ------------------------------------------------------------------
-# P5a: Deploy update_ech_pem.sh — fetches ECH PEM from Google DoH
-# ------------------------------------------------------------------
-ECH_PEM_SCRIPT="feeds/smpackage/luci-app-homeproxy/root/etc/homeproxy/scripts/update_ech_pem.sh"
-
-cat > "$ECH_PEM_SCRIPT" << 'SHEOF'
-#!/bin/sh
-# Fetch the latest ECH PEM for the given SNI from Google DoH
-ECH_SNI="${1:-cloudflare-ech.com}"
-PEM_FILE="/etc/homeproxy/ech.pem"
-
-for DOH_URL in \
-    "https://dns.google/resolve?name=${ECH_SNI}&type=HTTPS" \
-    "https://cloudflare-dns.com/dns-query?name=${ECH_SNI}&type=HTTPS"
-do
-    RESP=$(uclient-fetch -q -O- --timeout=15 "$DOH_URL" 2>/dev/null)
-    if [ -n "$RESP" ]; then
-        ECH_B64=$(echo "$RESP" | sed -n 's/.*ech=\([A-Za-z0-9+/=]\{1,\}\).*/\1/p' | head -1)
-        if [ -n "$ECH_B64" ]; then
-            printf '-----BEGIN ECH CONFIGS-----\n%s\n-----END ECH CONFIGS-----\n' "$ECH_B64" > "$PEM_FILE"
-            echo "ECH PEM updated (${#ECH_B64} bytes base64)"
-            exit 0
-        fi
-    fi
-done
-echo "Failed to fetch ECH config for ${ECH_SNI}"
-exit 1
-SHEOF
-chmod +x "$ECH_PEM_SCRIPT"
-echo "P5a update_ech_pem.sh: deployed"
+# P5a: PEM fetch is now inline ucode in update_subscriptions.uc (no shell script)
+echo "P5a: PEM fetch via ucode (inline)"
 
 # ------------------------------------------------------------------
 # P5b: Patch node.js — share link import frontend
@@ -528,12 +501,36 @@ assert old in content, "subscription VLess ECH anchor not found"
 content = content.replace(old, new, 1)
 print("P5c subscription VLess ECH: OK")
 
-# Add PEM refresh call in main() after node processing loop
+# Add PEM refresh call in main() after node processing loop via ucode
 insert_marker = "if (isEmpty(node_result)) {"
-fetch_call = '\tsystem(["sh", "/etc/homeproxy/scripts/update_ech_pem.sh", "cloudflare-ech.com"]);\n'
+fetch_call = '\t/* Fetch ECH PEM from AliDNS DoH (sing-box 1.12.x compat) */\n' \
+    '\ttry {\n' \
+    '\t\tconst ech_doh = '\''https://dns.alidns.com/resolve?name=cloudflare-ech.com&type=HTTPS'\'';\n' \
+    '\t\tconst ech_resp = wGET(ech_doh, '\''sing-box/1.12'\'');\n' \
+    '\t\tif (!isEmpty(ech_resp)) {\n' \
+    '\t\t\tconst ech_data = json(ech_resp);\n' \
+    '\t\t\tconst ech_answers = ech_data.Answer || [];\n' \
+    '\t\t\tfor (let ech_ans in ech_answers) {\n' \
+    '\t\t\t\tconst ech_str = ech_ans.data || '\'''\'';\n' \
+    '\t\t\t\tconst ech_m = match(ech_str, /ech="([A-Za-z0-9+\/=]+)"/);\n' \
+    '\t\t\t\tif (ech_m) {\n' \
+    '\t\t\t\t\tconst ech_pem = '\''-----BEGIN ECH CONFIGS-----\n'\'' + ech_m[1] + '\''\n-----END ECH CONFIGS-----'\'';\n' \
+    '\t\t\t\t\tconst ech_f = open('\''/etc/homeproxy/ech.pem'\'', '\''w'\'');\n' \
+    '\t\t\t\t\tif (ech_f) {\n' \
+    '\t\t\t\t\t\tech_f.write(ech_pem);\n' \
+    '\t\t\t\t\t\tech_f.close();\n' \
+    '\t\t\t\t\t\tlog('\''ECH PEM updated ('\'' + str(length(ech_m[1])) + '\'' bytes base64)'\'');\n' \
+    '\t\t\t\t\t}\n' \
+    '\t\t\t\t\tbreak;\n' \
+    '\t\t\t\t}\n' \
+    '\t\t\t}\n' \
+    '\t\t}\n' \
+    '\t} catch(ech_err) {\n' \
+    '\t\tlog('\''ECH PEM fetch failed: '\'' + ech_err);\n' \
+    '\t}\n'
 if fetch_call not in content:
     content = content.replace(insert_marker, fetch_call + insert_marker, 1)
-    print("P5c PEM refresh call: added")
+    print("P5c PEM refresh call: added (ucode)")
 else:
     print("P5c PEM refresh call: already present")
 
@@ -547,4 +544,3 @@ else
 fi
 
 echo "=== done ==="
-
