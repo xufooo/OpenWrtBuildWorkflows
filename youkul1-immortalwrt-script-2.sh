@@ -451,7 +451,7 @@ function applyECHParam(config, echParam) {
 	config.tls = '1';
 	config.tls_ech = '1';
 	config.tls_ech_config_path = '/etc/homeproxy/ech_' + decodeURIComponent(echParam.slice(0, sep)) + '.pem';
-	if (!/^https?:\/\//.test(echParam.slice(sep + 1)))
+	if (!echParam.slice(sep + 1).indexOf('http') === 0)
 		config.tls_ech_config = normalizeECHConfig(echParam.slice(sep + 1));
 }
 
@@ -522,7 +522,7 @@ function apply_ech_param(config, ech_param) {
 	config.tls = '1';
 	config.tls_ech = '1';
 	config.tls_ech_config_path = '/etc/homeproxy/ech_' + ech_sni + '.pem';
-	if (!match(substr(ech_param, sep + 1), /^https?:\/\//))
+	if (!index(substr(ech_param, sep + 1), 'http') == 0)
 		config.tls_ech_config = normalize_ech_config(substr(ech_param, sep + 1));
 }
 
