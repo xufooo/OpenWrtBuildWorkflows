@@ -437,7 +437,7 @@ helper = """function normalizeECHConfig(value) {
 \tif (value.includes('BEGIN ECH CONFIGS'))
 \t\treturn value;
 
-\treturn '-----BEGIN ECH CONFIGS-----\\n' + value + '\\n-----END ECH CONFIGS-----';
+\tvar nl=String.fromCharCode(10);\n\treturn '-----BEGIN ECH CONFIGS-----'+nl+value+nl+'-----END ECH CONFIGS-----';
 }
 
 function applyECHParam(config, echParam) {
@@ -504,7 +504,7 @@ helper = """function normalize_ech_config(value) {
 \tif (match(value, /BEGIN ECH CONFIGS/))
 \t\treturn value;
 
-\treturn '-----BEGIN ECH CONFIGS-----\\n' + value + '\\n-----END ECH CONFIGS-----';
+\tvar nl=String.fromCharCode(10);\n\treturn '-----BEGIN ECH CONFIGS-----'+nl+value+nl+'-----END ECH CONFIGS-----';
 }
 
 function apply_ech_param(config, ech_param) {
