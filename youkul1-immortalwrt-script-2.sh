@@ -204,6 +204,15 @@ config ruleset 'tiktok'
 	option update_interval '72h'
 	option enabled '1'
 
+config ruleset 'microsoft'
+	option label 'Microsoft'
+	option type 'remote'
+	option format 'binary'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-microsoft.srs'
+	option outbound 'direct-out'
+	option update_interval '72h'
+	option enabled '1'
+
 config ruleset 'github'
 	option label 'GitHub'
 	option type 'remote'
@@ -384,6 +393,13 @@ config routing_rule
 	list rule_set 'openai'
 	option action 'route'
 	option outbound 'proxy_out'
+
+config routing_rule
+	option label 'Microsoft'
+	option enabled '1'
+	list rule_set 'microsoft'
+	option action 'route'
+	option outbound 'direct-out'
 
 config routing_rule
 	option label 'Non-CN'
