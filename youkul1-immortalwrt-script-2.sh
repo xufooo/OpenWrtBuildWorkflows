@@ -467,7 +467,7 @@ function applyECHParam(config, echParam) {
 	config.tls = '1';
 	config.tls_ech = '1';
 	config.tls_sni = decodeURIComponent(echParam.slice(0, sep));
-config.tls_ech_config_path = '/etc/homeproxy/ech_' + decodeURIComponent(echParam.slice(0, sep)) + '.pem';
+	config.tls_ech_config_path = '/etc/homeproxy/ech_' + decodeURIComponent(echParam.slice(0, sep)) + '.pem';
 	if (echParam.slice(sep + 1).indexOf('http') !== 0)
 		config.tls_ech_config = normalizeECHConfig(echParam.slice(sep + 1));
 }
