@@ -589,3 +589,125 @@ else
 fi
 
 echo "=== done ==="
+
+# ===========================================================================
+# P6: generate_client.uc — robustness and ECH resilience
+# ===========================================================================
+GCU_PATH="feeds/smpackage/luci-app-homeproxy/root/etc/homeproxy/scripts/generate_client.uc"
+if [ -f "$GCU_PATH" ] && command -v python3 >/dev/null 2>&1; then
+	python3 << 'PYEOF_P6'
+import pathlib
+
+path = "feeds/smpackage/luci-app-homeproxy/root/etc/homeproxy/scripts/generate_client.uc"
+with open(path, 'r', encoding='utf-8') as f:
+    content = f.read()
+
+fixes = 0
+
+# P6a: strToTime for gRPC/HTTP2 transport timeouts (upstream 4613766)
+for old, label in [
+    ("idle_timeout: (node.http_idle_timeout),", "idle_timeout"),
+    ("ping_timeout: (node.http_ping_timeout),", "ping_timeout"),
+]:
+    if old in content:
+        content = content.replace(old, old.replace("(node.", "strToTime(node.").replace("),", "),"), 1)
+        fixes += 1
+        print(f"P6a strToTime {label}: OK")
+    else:
+        print(f"P6a strToTime {label}: SKIP")
+
+# P6b: ECH PEM file existence check
+old = "ech: (node.tls_ech === '1') ? {\n\t\t\t\tenabled: true,\n\t\t\t\tconfig: node.tls_ech_config,\n\t\t\t\tconfig_path: node.tls_ech_config_path\n\t\t\t} : null,"
+new = """ech: (node.tls_ech === '1') ? (() => {
+\t\t\t\tconst ech_config = node.tls_ech_config;
+\t\t\t\tconst ech_path = (node.tls_ech_config_path && readfile(node.tls_ech_config_path)) ? node.tls_ech_config_path : null;
+\t\t\t\tif (isEmpty(ech_config) && isEmpty(ech_path))
+\t\t\t\t\treturn null;
+\t\t\t\treturn {
+\t\t\t\t\tenabled: true,
+\t\t\t\t\tconfig: ech_config,
+\t\t\t\t\tconfig_path: ech_path
+\t\t\t\t};
+\t\t\t})() : null,"""
+if old in content:
+    content = content.replace(old, new, 1)
+    fixes += 1
+    print("P6b ECH file check: OK")
+else:
+    print("P6b ECH file check: SKIP")
+
+# P6c: main_node !== 'nil' guards (3 locations)
+for anchor, old_guard in [
+    ("/* Main DNS */", "if (!isEmpty(main_node)) {"),
+    ("/* Main outbounds */", "if (!isEmpty(main_node)) {"),
+    ("/* Routing rules */", "if (!isEmpty(main_node)) {"),
+]:
+    new_guard = "if (!isEmpty(main_node) && main_node !== 'nil') {"
+    if anchor in content and old_guard in content:
+        content = content.replace(old_guard, new_guard, 1)
+        fixes += 1
+    else:
+        print(f"P6c nil guard: SKIP ({anchor[:20]}...)")
+
+print(f"P6c nil guards: applied")
+
+# P6d: null-guard generate_outbound returns
+for old, new in [
+    ("push(config.outbounds, generate_outbound(main_node_cfg));\n\t\t\tconfig.outbounds[length(config.outbounds)-1].tag = 'main-out';",
+     "const ob = generate_outbound(main_node_cfg);\n\t\t\tif (ob) {\n\t\t\t\tpush(config.outbounds, ob);\n\t\t\t\tconfig.outbounds[length(config.outbounds)-1].tag = 'main-out';\n\t\t\t}"),
+    ("push(config.outbounds, generate_outbound(main_udp_node_cfg));\n\t\t\tconfig.outbounds[length(config.outbounds)-1].tag = 'main-udp-out';",
+     "const ob = generate_outbound(main_udp_node_cfg);\n\t\t\tif (ob) {\n\t\t\t\tpush(config.outbounds, ob);\n\t\t\t\tconfig.outbounds[length(config.outbounds)-1].tag = 'main-udp-out';\n\t\t\t}"),
+]:
+    if old in content:
+        content = content.replace(old, new, 1)
+        fixes += 1
+        print("P6d null-guard: OK")
+    else:
+        print("P6d null-guard: SKIP")
+
+# P6e: DNS/route final fallbacks
+if "}\n/* DNS end */" in content:
+    content = content.replace("}\n/* DNS end */", "}\nif (isEmpty(config.dns.final))\n\tconfig.dns.final = 'default-dns';\n/* DNS end */", 1)
+    fixes += 1
+    print("P6e DNS final: OK")
+if "}\n/* Routing rules end */" in content:
+    content = content.replace("}\n/* Routing rules end */", "}\nif (isEmpty(config.route.final))\n\tconfig.route.final = 'direct-out';\n/* Routing rules end */", 1)
+    fixes += 1
+    print("P6e route final: OK")
+
+with open(path, 'w', encoding='utf-8') as f:
+    f.write(content)
+print(f"P6 generate_client.uc: {fixes} fixes")
+PYEOF_P6
+	echo "P6 generate_client.uc: done"
+else
+	echo "P6 generate_client.uc: SKIP"
+fi
+
+# ---------------------------------------------------------------------------
+# P7: config/homeproxy — safe defaults for first-time flash
+# ---------------------------------------------------------------------------
+if [ -f "$CONF_PATH" ]; then
+	sed -i "s/option main_node 'nil'/option main_node ''/" "$CONF_PATH" && echo "P7a empty main_node: OK" || echo "P7a SKIP"
+	sed -i "s/option main_udp_node 'same'/option main_udp_node ''/" "$CONF_PATH" && echo "P7a empty main_udp_node: OK" || echo "P7a SKIP"
+	sed -i "s/option default_server 'local-dns'/option default_server 'default-dns'/" "$CONF_PATH" && echo "P7b default-dns: OK" || echo "P7b SKIP"
+else
+	echo "P7 config: SKIP"
+fi
+
+# ---------------------------------------------------------------------------
+# P8: init.d/homeproxy — chmod RUN_DIR for ujail
+# ---------------------------------------------------------------------------
+INIT_PATH="feeds/smpackage/luci-app-homeproxy/root/etc/init.d/homeproxy"
+sed -i '/chown -R sing-box:sing-box "\$RUN_DIR"/a\\tchmod -R a+r "\$RUN_DIR" 2>/dev/null' "$INIT_PATH" 2>/dev/null
+grep -q 'chmod -R a+r' "$INIT_PATH" && echo "P8 chmod RUN_DIR: OK" || echo "P8 chmod RUN_DIR: SKIP"
+
+# ---------------------------------------------------------------------------
+# P9: luci.homeproxy — pidof for proxy_check
+# ---------------------------------------------------------------------------
+LUCI_PATH="feeds/smpackage/luci-app-homeproxy/root/usr/share/rpcd/ucode/luci.homeproxy"
+if [ -f "$LUCI_PATH" ]; then
+	sed -i "s|return { result: (system(\`/usr/bin/wget --spider -qT3 \${url} 2>\"/dev/null\"\`, 3100) === 0) };|return { result: (system(\`pidof sing-box >/dev/null 2>&1\`) === 0) };|" "$LUCI_PATH" && echo "P9 pidof: OK" || echo "P9 pidof: SKIP"
+else
+	echo "P9 luci.homeproxy: SKIP"
+fi
