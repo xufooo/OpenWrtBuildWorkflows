@@ -521,7 +521,7 @@ helper = """function normalize_ech_config(value) {
 \tif (match(value, /BEGIN ECH CONFIGS/))
 \t\treturn value;
 
-\tlet nl=String.fromCharCode(10);\n\treturn '-----BEGIN ECH CONFIGS-----'+nl+value+nl+'-----END ECH CONFIGS-----';
+\tlet nl=chr(10);\n\treturn '-----BEGIN ECH CONFIGS-----'+nl+value+nl+'-----END ECH CONFIGS-----';
 }
 
 function apply_ech_param(config, ech_param) {
