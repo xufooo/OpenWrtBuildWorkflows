@@ -707,7 +707,7 @@ grep -q 'chmod -R a+r' "$INIT_PATH" && echo "P8 chmod RUN_DIR: OK" || echo "P8 c
 # ---------------------------------------------------------------------------
 LUCI_PATH="feeds/smpackage/luci-app-homeproxy/root/usr/share/rpcd/ucode/luci.homeproxy"
 if [ -f "$LUCI_PATH" ]; then
-	sed -i "s|return { result: (system(\`/usr/bin/wget --spider -qT3 \${url} 2>\"/dev/null\"\`, 3100) === 0) };|return { result: (system(\`pidof sing-box >/dev/null 2>&1\`) === 0) };|" "$LUCI_PATH" && echo "P9 pidof: OK" || echo "P9 pidof: SKIP"
+	sed -i "s|/usr/bin/wget --spider -qT3 \${url} 2>\"/dev/null\"\`, 3100|pidof sing-box >/dev/null 2>\&1\`|" "$LUCI_PATH" && echo "P9 pidof: OK" || echo "P9 pidof: SKIP"
 else
 	echo "P9 luci.homeproxy: SKIP"
 fi
