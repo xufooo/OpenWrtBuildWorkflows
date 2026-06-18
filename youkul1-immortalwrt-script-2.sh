@@ -699,7 +699,7 @@ fi
 # P8: init.d/homeproxy — chmod RUN_DIR for ujail
 # ---------------------------------------------------------------------------
 INIT_PATH="feeds/smpackage/luci-app-homeproxy/root/etc/init.d/homeproxy"
-sed -i '/chown -R sing-box:sing-box "\$RUN_DIR"/a\\tchmod -R a+r "\$RUN_DIR" 2>/dev/null' "$INIT_PATH" 2>/dev/null
+sed -i '/chown -R sing-box:sing-box "\$RUN_DIR"/a\	chmod -R a+r "\$RUN_DIR" 2>/dev/null' "$INIT_PATH" 2>/dev/null
 grep -q 'chmod -R a+r' "$INIT_PATH" && echo "P8 chmod RUN_DIR: OK" || echo "P8 chmod RUN_DIR: SKIP"
 
 # ---------------------------------------------------------------------------
