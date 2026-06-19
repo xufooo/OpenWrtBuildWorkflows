@@ -685,6 +685,14 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# P6f: default_mark for TPROXY bypass (prevents sing-box EOF loop)
+# ---------------------------------------------------------------------------
+if [ -f "$GCU_PATH" ]; then
+	sed -i '/default_interface: default_interface$/a\\tdefault_mark: strToInt(self_mark)' "$GCU_PATH" 2>/dev/null
+	grep -q 'default_mark: strToInt(self_mark)' "$GCU_PATH" && echo "P6f default_mark: OK" || echo "P6f default_mark: SKIP"
+fi
+
+# ---------------------------------------------------------------------------
 # P7: config/homeproxy — safe defaults for first-time flash
 # ---------------------------------------------------------------------------
 if [ -f "$CONF_PATH" ]; then
