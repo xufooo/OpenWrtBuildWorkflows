@@ -424,7 +424,7 @@ config routing_rule
 	option enabled '1'
 	list rule_set 'scholar'
 	option action 'route'
-	option outbound 'proxy_out'
+	option outbound 'direct-out'
 
 config routing_rule
 	option label 'Non-CN'
