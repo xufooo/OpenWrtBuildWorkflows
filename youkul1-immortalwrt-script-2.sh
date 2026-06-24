@@ -249,6 +249,15 @@ config ruleset 'games'
 	option update_interval '72h'
 	option enabled '1'
 
+config ruleset 'scholar'
+	option label 'Scholar'
+	option type 'remote'
+	option format 'binary'
+	option url 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set/geosite-category-scholar-%21cn.srs'
+	option outbound 'direct-out'
+	option update_interval '168h'
+	option enabled '1'
+
 config dns_rule
 	option label 'Block SVCB/HTTPS'
 	option enabled '1'
@@ -400,6 +409,22 @@ config routing_rule
 	list rule_set 'microsoft'
 	option action 'route'
 	option outbound 'direct-out'
+
+config routing_rule
+	option label 'Google Scholar'
+	option enabled '1'
+	list domain 'scholar.google.com'
+	list domain 'scholar.google.com.hk'
+	list domain 'scholar.googleusercontent.com'
+	option action 'route'
+	option outbound 'proxy_out'
+
+config routing_rule
+	option label 'Scholar'
+	option enabled '1'
+	list rule_set 'scholar'
+	option action 'route'
+	option outbound 'proxy_out'
 
 config routing_rule
 	option label 'Non-CN'
