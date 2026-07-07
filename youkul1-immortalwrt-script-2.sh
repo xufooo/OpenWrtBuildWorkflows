@@ -312,6 +312,13 @@ config routing_rule
 	option outbound 'direct-out'
 
 config routing_rule
+	option label 'Private IP'
+	option enabled '1'
+	list rule_set 'private_ip'
+	option action 'route'
+	option outbound 'direct-out'
+
+config routing_rule
 	option label 'CN IP'
 	option enabled '1'
 	list rule_set 'cn_ip'
@@ -319,9 +326,9 @@ config routing_rule
 	option outbound 'direct-out'
 
 config routing_rule
-	option label 'Private IP'
+	option label 'Microsoft'
 	option enabled '1'
-	list rule_set 'private_ip'
+	list rule_set 'microsoft'
 	option action 'route'
 	option outbound 'direct-out'
 
@@ -395,20 +402,6 @@ config routing_rule
 	list rule_set 'github'
 	option action 'route'
 	option outbound 'proxy_out'
-
-config routing_rule
-	option label 'OpenAI'
-	option enabled '1'
-	list rule_set 'openai'
-	option action 'route'
-	option outbound 'proxy_out'
-
-config routing_rule
-	option label 'Microsoft'
-	option enabled '1'
-	list rule_set 'microsoft'
-	option action 'route'
-	option outbound 'direct-out'
 
 config routing_rule
 	option label 'Google Scholar'
