@@ -409,6 +409,7 @@ config routing_rule
 	list domain 'scholar.google.com'
 	list domain 'scholar.google.com.hk'
 	list domain 'scholar.googleusercontent.com'
+	list domain 'update.googleapis.com'
 	option action 'route'
 	option outbound 'proxy_out'
 
