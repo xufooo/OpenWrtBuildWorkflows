@@ -911,3 +911,29 @@ if [ -f "$LUCI_PATH" ]; then
 else
 	echo "P9 luci.homeproxy: SKIP"
 fi
+
+# ---------------------------------------------------------------------------
+# P10: BBR + fq — BBR 必须配 fq 队列才完全生效
+#   内核选项 CONFIG_NET_SCH_FQ 会被 make defconfig 重写, 因此改用:
+#   1) 编译期选 kmod-sched (官方 netsupport.mk: SCHED_MODULES_EXTRA 含 sch_fq)
+#   2) 运行期在 sysctl.conf + rc.local 写 net.core.default_qdisc=fq (双保险)
+# ---------------------------------------------------------------------------
+SYSCTL="package/base-files/files/etc/sysctl.conf"
+if [ -f "$SYSCTL" ]; then
+	grep -q 'net.core.default_qdisc' "$SYSCTL" || printf '\n# BBR 需要 fq 队列\nnet.core.default_qdisc=fq\nnet.ipv4.tcp_congestion_control=bbr\n' >> "$SYSCTL"
+	echo "P10 sysctl fq+bbr: OK"
+else
+	echo "P10 sysctl.conf: SKIP"
+fi
+
+# 兜底: rc.local 里 modprobe sch_fq 后再设
+RCLOCAL="package/base-files/files/etc/rc.local"
+if [ -f "$RCLOCAL" ] && ! grep -q 'default_qdisc' "$RCLOCAL"; then
+	sed -i '/^exit 0/i\\
+\\
+# BBR 必须配 fq 队列 (sch_fq 由 kmod-sched 提供)\\
+modprobe sch_fq 2>\/dev\/null\\
+echo fq > \/proc\/sys\/net\/core\/default_qdisc 2>\/dev\/null\\
+echo bbr > \/proc\/sys\/net\/ipv4\/tcp_congestion_control 2>\/dev\/null' "$RCLOCAL"
+	echo "P10 rc.local fq: OK"
+fi
