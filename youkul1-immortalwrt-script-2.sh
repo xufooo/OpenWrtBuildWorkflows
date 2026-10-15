@@ -912,28 +912,85 @@ else
 	echo "P9 luci.homeproxy: SKIP"
 fi
 
+
 # ---------------------------------------------------------------------------
-# P10: BBR + fq — BBR 必须配 fq 队列才完全生效
-#   内核选项 CONFIG_NET_SCH_FQ 会被 make defconfig 重写, 因此改用:
-#   1) 编译期选 kmod-sched (官方 netsupport.mk: SCHED_MODULES_EXTRA 含 sch_fq)
-#   2) 运行期在 sysctl.conf + rc.local 写 net.core.default_qdisc=fq (双保险)
+# P10: BBR + fq — BBR requires the fq qdisc to fully engage
+#   CONFIG_NET_SCH_FQ in .config gets rewritten by make defconfig, so instead:
+#   1) select kmod-sched at build time (upstream netsupport.mk: SCHED_MODULES_EXTRA has sch_fq)
+#   2) set net.core.default_qdisc=fq in sysctl.conf + rc.local at build time
 # ---------------------------------------------------------------------------
 SYSCTL="package/base-files/files/etc/sysctl.conf"
 if [ -f "$SYSCTL" ]; then
-	grep -q 'net.core.default_qdisc' "$SYSCTL" || printf '\n# BBR 需要 fq 队列\nnet.core.default_qdisc=fq\nnet.ipv4.tcp_congestion_control=bbr\n' >> "$SYSCTL"
-	echo "P10 sysctl fq+bbr: OK"
+	grep -q 'net.core.default_qdisc' "$SYSCTL" 2>/dev/null || \
+		printf '\n# BBR requires fq qdisc\nnet.core.default_qdisc=fq\nnet.ipv4.tcp_congestion_control=bbr\n' >> "$SYSCTL"
+	grep -q 'net.core.default_qdisc' "$SYSCTL" 2>/dev/null && echo "P10 sysctl fq+bbr: OK" || echo "P10 sysctl: WRITE FAILED"
 else
-	echo "P10 sysctl.conf: SKIP"
+	echo "P10 sysctl: SKIP (not found)"
 fi
 
-# 兜底: rc.local 里 modprobe sch_fq 后再设
+# rc.local fallback: modprobe sch_fq then set qdisc
 RCLOCAL="package/base-files/files/etc/rc.local"
-if [ -f "$RCLOCAL" ] && ! grep -q 'default_qdisc' "$RCLOCAL"; then
-	sed -i '/^exit 0/i\\
-\\
-# BBR 必须配 fq 队列 (sch_fq 由 kmod-sched 提供)\\
-modprobe sch_fq 2>\/dev\/null\\
-echo fq > \/proc\/sys\/net\/core\/default_qdisc 2>\/dev\/null\\
-echo bbr > \/proc\/sys\/net\/ipv4\/tcp_congestion_control 2>\/dev\/null' "$RCLOCAL"
-	echo "P10 rc.local fq: OK"
+if [ -f "$RCLOCAL" ]; then
+	grep -q 'default_qdisc' "$RCLOCAL" 2>/dev/null || {
+		awk '
+			/^exit 0/ && !done {
+				print ""
+				print "# BBR requires fq qdisc (sch_fq from kmod-sched)"
+				print "modprobe sch_fq 2>/dev/null"
+				print "echo fq > /proc/sys/net/core/default_qdisc 2>/dev/null"
+				print "echo bbr > /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null"
+				print ""
+				done=1
+			}
+			{ print }
+		' "$RCLOCAL" > "$RCLOCAL.tmp" && mv "$RCLOCAL.tmp" "$RCLOCAL"
+	}
+	grep -q 'default_qdisc' "$RCLOCAL" 2>/dev/null && echo "P10 rc.local fq: OK" || echo "P10 rc.local: WRITE FAILED"
+else
+	echo "P10 rc.local: SKIP (not found)"
+fi
+
+# ---------------------------------------------------------------------------
+# P11: chinadns-ng — DNS pollution filtering
+#   Fills the gap left by sing-box 1.12, which lacks match_response (1.14 only).
+#   Logic: query both chn_dns and trust_dns; if chn_dns answers first with a
+#   non-CN IP, discard it and wait for trust_dns instead.
+#   Chain: client -> dnsmasq(:53) -> chinadns-ng(:5353) -> chn/trust DNS
+# ---------------------------------------------------------------------------
+CDNG=""
+for p in \
+	"feeds/luci/applications/luci-app-chinadns-ng/root/etc/config/chinadns-ng" \
+	"package/network/services/chinadns-ng/files/chinadns-ng.config" \
+	"package/network/services/chinadns-ng/files/chinadns-ng" ; do
+	[ -f "$p" ] && { CDNG="$p"; break; }
+done
+
+if [ -n "$CDNG" ]; then
+	CDNG_SETOPT() {
+		KEY="$1"; VAL="$2"
+		awk -v k="$KEY" -v v="$VAL" '
+			$1 == "option" && $2 == k { print "\toption " k " \047" v "\047"; f=1; next }
+			{ print }
+			END { if (!f) print "\toption " k " \047" v "\047" }
+		' "$CDNG" > "$CDNG.tmp" && mv "$CDNG.tmp" "$CDNG"
+	}
+	CDNG_SETOPT enabled "1"
+	CDNG_SETOPT port "5353"
+	CDNG_SETOPT chn_dns "114.114.114.114"
+	CDNG_SETOPT trust_dns "127.0.0.1#5333"
+	grep -q "5353" "$CDNG" 2>/dev/null && echo "P11 chinadns-ng config: OK ($CDNG)" || echo "P11 chinadns-ng: WRITE FAILED"
+else
+	echo "P11 chinadns-ng: SKIP (config not found)"
+fi
+
+# Point dnsmasq upstream at chinadns-ng
+DHCP="package/base-files/files/etc/config/dhcp"
+if [ -n "$CDNG" ] && [ -f "$DHCP" ]; then
+	if ! grep -q "127.0.0.1#5353" "$DHCP" 2>/dev/null; then
+		awk '
+			/^config dnsmasq/ && !done { print; print "\toption server \047127.0.0.1#5353\047"; done=1; next }
+			{ print }
+		' "$DHCP" > "$DHCP.tmp" && mv "$DHCP.tmp" "$DHCP"
+	fi
+	grep -q "127.0.0.1#5353" "$DHCP" 2>/dev/null && echo "P11 dnsmasq->chinadns-ng: OK" || echo "P11 dnsmasq: WRITE FAILED"
 fi
