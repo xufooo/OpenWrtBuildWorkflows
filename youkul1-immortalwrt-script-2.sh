@@ -1095,21 +1095,41 @@ sed -n '/# Setup routing table/,$p' "$HPINIT" >> "$HPINIT.p11tmp"
 insert_before "$HPINIT" "# Setup routing table" || exit 1
 
 # 2) firewall_post.ut: 认 chinadns-ng 的 nft 集合, 并挡掉代理侧 QUIC。
-sed -i "s#^\(\t*const routing_mode = uci.get(cfgname, 'config', 'routing_mode'\) .*#\1\n\tconst chinadns = routing_mode === 'custom' \&\& (uci.get(cfgname, 'config', 'dns_routing') || 'native') === 'chinadns';#" "$HPFW"
+#    Jinja2 的 {% 与 0x.. 标记在 sed/awk 的正则里都要转义, 容易静默失败,
+#    所以整段用 awk 字面匹配 + 逐行 print, 不走正则替换。
+awk '
+/^const routing_mode = uci\.get\(cfgname, .config., .routing_mode.\)/ && !var_done {
+	print
+	print "const chinadns = routing_mode === " SQ "custom" SQ " && (uci.get(cfgname, " SQ "config" SQ ", " SQ "dns_routing" SQ ") || " SQ "native" SQ ") === " SQ "chinadns" SQ ";"
+	var_done = 1
+	next
+}
+{ print }
+BEGIN { SQ = "\047" }
+' "$HPFW" > "$HPFW.p11tmp" && mv "$HPFW.p11tmp" "$HPFW"
+grep -qF "const chinadns = routing_mode === 'custom'" "$HPFW" \
+	|| { echo "P11 firewall: chinadns 变量插入失败" >&2; exit 1; }
+
 for pair in "homeproxy_redirect:homeproxy_redirect_proxy_port" \
             "homeproxy_mangle_prerouting:homeproxy_mangle_tproxy_port" \
             "homeproxy_mangle_output:homeproxy_mangle_mark"; do
 	chain="${pair%%:*}"; target="${pair##*:}"
 	grep -qF "chain $chain {" "$HPFW" || { echo "P11 firewall anchor missing: $chain" >&2; exit 1; }
-	sed -i "/^chain $chain {$/a\\
-\\\\t\tmeta mark \& 0x10000000 != 0 counter return\\
-\\\\t\tmeta mark \& 0x20000000 != 0 udp dport 443 counter reject\\
-\\\\t\tmeta mark \& 0x20000000 != 0 counter goto $target" "$HPFW"
-	# 只在 chinadns 模式下生效
-	sed -i "/^\t\tmeta mark \& 0x10000000 != 0 counter return$/i\\
-{% if (chinadns): %}" "$HPFW"
-	sed -i "/^\t\tmeta mark \& 0x20000000 != 0 counter goto $target$/a\\
-{% endif %}" "$HPFW"
+	# 插入块先落到临时文件, 再由 awk 在锚点后逐行打印, 避开反斜杠续行
+	cat > "$HPFW.p11block" << EOF
+{% if (chinadns): %}
+	meta mark & 0x10000000 != 0 counter return
+	meta mark & 0x20000000 != 0 udp dport 443 counter reject
+	meta mark & 0x20000000 != 0 counter goto $target
+{% endif %}
+EOF
+	awk -v chain="$chain" -v blk="$HPFW.p11block" '
+	BEGIN { while ((getline l < blk) > 0) block = block l "\n" }
+	$0 == "chain " chain " {" { print; printf "%s", block; next }
+	{ print }
+	' "$HPFW" > "$HPFW.p11tmp" && mv "$HPFW.p11tmp" "$HPFW"
+	rm -f "$HPFW.p11block"
+	grep -qF "counter goto $target" "$HPFW" || { echo "P11 firewall: $chain 插入失败" >&2; exit 1; }
 done
 
 # 3) generate_client.uc: 节点和 ECH 域名不能依赖它们自己的隧道。
@@ -1118,13 +1138,16 @@ awk '
 /^\t\/\* DNS rules \*\/$/ && !done {
 	print "\t/* Node and ECH bootstrap must not depend on their own proxy tunnel. */"
 	print "\tif (routing_mode === \x27custom\x27 && (uci.get(uciconfig, ucimain, \x27dns_routing\x27) || \x27native\x27) === \x27chinadns\x27) {"
-	print "\t\tlet bootstrap = [];"
-	print "\t\tuci.foreach(uciconfig, ucinode, (node) => {"
-	print "\t\t\tif (node.address)"
-	print "\t\t\t\tpush(bootstrap, node.address);"
-	print "\t\t\tif (node.tls_ech === \x271\x27 && node.tls_sni)"
-	print "\t\t\t\tpush(bootstrap, node.tls_sni);"
-	print "\t\t});"
+	print "		let bootstrap = [];"
+	print "		uci.foreach(uciconfig, ucinode, (node) => {"
+	print "			// 只收域名。Cloudflare 优选节点的 address 是 IP, 而这类 IP"
+	print "			// 同时是大量站点的 CDN, 钉死在 bootstrap 上游会让它们解析错。"
+	print "			// 域名必有字母结尾的 TLD, IP 以数字结尾。"
+	print "			if (node.address && match(node.address, /\\.[a-z]{2,}\$/))"
+	print "				push(bootstrap, node.address);"
+	print "			if (node.tls_ech === \x271\x27 && node.tls_sni)"
+	print "				push(bootstrap, node.tls_sni);"
+	print "		});"
 	print "\t\tif (length(bootstrap))"
 	print "\t\t\tpush(config.dns.rules, {domain: uniq(bootstrap), action: \x27route\x27, server: \x27cfg-bootstrap_dns-dns\x27});"
 	print "\t}"
