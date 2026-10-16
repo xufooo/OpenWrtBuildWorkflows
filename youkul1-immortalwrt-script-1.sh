@@ -40,7 +40,4 @@
 
 #echo 'src-git small https://github.com/kenzok8/small' >> feeds.conf.default
 sed -i '$a src-git smpackage https://github.com/kenzok8/small-package' feeds.conf.default
-# Standalone LuCI form for chinadns-ng. Its Makefile is a plain package.mk with
-# an explicit BuildPackage call, so it builds and installs as a normal feed.
-sed -i '$a src-git lucichinadnsng https://github.com/izilzty/luci-app-chinadns-ng' feeds.conf.default
 #sed -i 's/^#\(.*helloworld\)/\1/' feeds.conf.default

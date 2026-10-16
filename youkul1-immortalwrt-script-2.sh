@@ -951,416 +951,211 @@ else
 fi
 
 # ===========================================================================
-# P11: chinadns-ng — DNS 分流 / 污染过滤 / 缓存
+# P11: chinadns-ng — DNS 污染过滤 (可选, 由 HomeProxy 界面开关)
 #
 # sing-box 1.12 没有 match_response (1.14 才有), 所以污染过滤交给 chinadns-ng:
-# 同时问 china_dns 和 trust_dns, china_dns 先答但 IP 不属于国内就丢弃, 等 trust_dns。
+# 同时问 china_dns 和 trust_dns, china_dns 先答但 IP 不属于国内就丢弃。
 #
-# 链路:
-#   客户端 -> dnsmasq(:53) -> chinadns-ng(:5353)
-#                       国内域名 -> china_dns (直连)
-#                       其他     -> trust_dns = sing-box(:5333), 经 RN 节点出境
+# 写法照抄 passwall 的 run_chinadns_ng (usr/share/passwall/app.sh): 只用
+# chnlist/gfwlist 两个自动名单, 精确分流仍由 HomeProxy 的 custom 规则负责,
+# 自动名单会误判的少数域名写进 direct_list.txt 手动补 (同 passwall 的
+# direct_host)。不装 luci-app-chinadns-ng, 界面在 HomeProxy 里。
 #
-# 分组优先级 (policy.uc 内实现, 最长后缀优先):
-#   节点域名 > 阻断名单 > 直连名单 > 代理名单 > china/gfw 大表
-# 直连组打 0x10000000, 代理组打 0x20000000, firewall_post.ut 据此分流。
+# 开关: config.dns_routing = chinadns | native
+#   native  = 上游行为, 完全不改
+#   chinadns = 启用本段
 #
-# LuCI 界面是唯一配置源: /etc/config/chinadns-ng -> policy.uc -> 启动参数。
-# 改完界面保存并重启服务即生效, 不必改本脚本。
-#
-# 注意 dnsmasq 上游必须是 'list server': dnsmasq 静默忽略 'option server',
-# 结果上游保持默认值, chinadns-ng 永远收不到查询。
+# 参数取自 passwall: -b 127.0.0.1 -c/-t 双上游 -4/-6 IP 段
+#   -m chnlist -M -a -g gfwlist -A gfw 集合 -f (公平模式) -N (IPv6)
 # ===========================================================================
+HPDIR="feeds/smpackage/luci-app-homeproxy"
 FILES="package/base-files/files"
-HPDIR="feeds/luci/applications/luci-app-homeproxy"
-RUN="$FILES/usr/share/homeproxy-policy"
+CDNG="$FILES/etc/chinadns-ng"
+mkdir -p "$CDNG" "$FILES/etc/config"
 
-mkdir -p "$RUN" "$FILES/etc/chinadns-ng" "$FILES/etc/config" \
-         "$FILES/etc/init.d" "$FILES/etc/rc.d"
+# --- 名单: 源与 passwall 一致 (rule_update.lua) --------------------------
+#   gfwlist  Loyalsoldier/v2ray-rules-dat/gfw.txt
+#   chnroute ispip.clang.cn/all_cn.txt  + all_cn_ipv6.txt
+#   chnlist  felixonmars/dnsmasq-china-list 三个 .conf, 抽 server=/域/ 部分
+#   精确分流仍归 HomeProxy 的 custom 规则; 自动名单判错的写进 direct_list.txt。
+cat > "$CDNG/direct_list.txt" << 'EOF'
+# 自动名单会判成境外、但本机需要直连的域名 (同 passwall 的 direct_host)
+# 对应 HomeProxy 规则 07 Direct Microsoft CN
+microsoft.com
+apple.com
+EOF
 
-# --- P11a: /etc/config/chinadns-ng ---------------------------------------
-# 字段与 izilzty luci-app-chinadns-ng 的界面一一对应。
-# no_ipv6='g' = 只屏蔽被墙域名的 AAAA: 本机 LAN IPv6 是运营商国内段, 出不了国,
-# 客户端拿到境外 IPv6 只会白等超时; 国内 IPv6 保留, 直连更快。
-cat > "$FILES/etc/config/chinadns-ng" << 'CDNG_EOF'
-config chinadns-ng 'main'
-	option enable '1'
-	option bind_addr '127.0.0.1'
-	option bind_port '5353'
-	option china_dns '119.29.29.29'
-	option trust_dns '127.0.0.1#5333'
-	option chnlist_file '/etc/chinadns-ng/chinalist.txt'
-	option gfwlist_file '/etc/chinadns-ng/gfwlist.txt'
-	option ipset_name4 'inet@hp_policy@cn4'
-	option ipset_name6 'inet@hp_policy@cn6'
-	option add_tagchn_ip 'inet@hp_policy@domestic4,inet@hp_policy@domestic6'
-	option add_taggfw_ip 'inet@hp_policy@gfw4,inet@hp_policy@gfw6'
-	option default_tag 'none'
-	option no_ipv6 'g'
-	option filter_unknown_ipv6 '1'
-	option timeout_sec '3'
-	option repeat_times '1'
-	option cache_size '4096'
-	option verdict_cache_size '5000'
-	option cache_stale '0'
-	option cache_refresh '0'
-	option chnlist_first '0'
-	option verbose '0'
-CDNG_EOF
-echo "P11a chinadns-ng config: OK"
+: > "$CDNG/block-list.txt"
 
-# --- P11b: /etc/init.d/chinadns-ng ---------------------------------------
-# 读上面的 UCI 生成启动参数, 所以界面改完重启即生效。
-cat > "$FILES/etc/init.d/chinadns-ng" << 'INIT_EOF'
-#!/bin/sh /etc/rc.common
-START=99
-STOP=10
-USE_PROCD=1
+fetch() {
+	local url="$1" dst="$2"
+	curl -fsSL -m 300 "$url" -o "$dst" 2>/dev/null && [ -s "$dst" ]
+}
 
-start_service() {
-	[ "$(uci -q get chinadns-ng.main.enable)" = 1 ] || return 0
-	mkdir -p /var/run/homeproxy-policy
-	# 必须等 sing-box 的 DNS 端口就绪: 否则首次 trust_dns 查询失败, 回落到
-	# 国内 DNS, 污染结果会被写进缓存 (表现为 GitHub 主站 TLS 被重置)。
-	local i=0
-	while [ $i -lt 30 ]; do
-		netstat -tln 2>/dev/null | grep -q ':5333 ' && break
-		sleep 1
-		i=$((i + 1))
+# chnlist: 三个 dnsmasq conf 里抽出 server=/domain/ 的域名
+build_chinalist() {
+	local acc="$CDNG/chinalist.txt.raw"
+	: > "$acc"
+	for f in accelerated-domains.china.conf apple.china.conf google.china.conf; do
+		fetch "https://fastly.jsdelivr.net/gh/felixonmars/dnsmasq-china-list/$f" "$CDNG/$f" || continue
+		# server=/domain/... -> domain
+		sed -n "s#^[ \t]*server=/\([^/]*\)/.*#\1#p" "$CDNG/$f" >> "$acc"
+	rm -f "$CDNG/$f"
 	done
-	ucode /usr/share/homeproxy-policy/policy.uc || return 1
-	/usr/bin/chinadns-ng -C /var/run/homeproxy-policy/chinadns.conf -V >/dev/null || return 1
-	# 学到的 DNS 集合要跨普通重启和 fw4 reload 存活
-	if ! nft list table inet hp_policy >/dev/null 2>&1; then
-		nft -f /var/run/homeproxy-policy/table.nft || return 1
-	fi
-	procd_open_instance
-	procd_set_param command /usr/bin/chinadns-ng -C /var/run/homeproxy-policy/chinadns.conf
-	procd_set_param respawn
-	procd_set_param file /etc/config/chinadns-ng /etc/config/homeproxy
-	procd_set_param stdout 1
-	procd_set_param stderr 1
-	procd_close_instance
+	[ -s "$acc" ] || return 1
+	sort -u "$acc" > "$CDNG/chinalist.txt"
+	rm -f "$acc"
+	[ "$(wc -l < "$CDNG/chinalist.txt")" -ge 100 ]
 }
 
-reload_service() {
-	stop
-	start
-}
-
-service_triggers() {
-	procd_add_reload_trigger chinadns-ng homeproxy
-}
-INIT_EOF
-chmod +x "$FILES/etc/init.d/chinadns-ng"
-mkdir -p "$FILES/etc/rc.d"
-ln -sf /etc/init.d/chinadns-ng "$FILES/etc/rc.d/S99chinadns-ng"
-echo "P11b chinadns-ng init: OK"
-
-# --- P11c: 分组与分类 (policy.uc / validate.uc) ---------------------------
-# policy.uc 从 UCI 和 homeproxy 的节点/名单生成 chinadns 配置与 nft 集合。
-cat > "$RUN/policy.uc" << 'POLICY_EOF'
-#!/usr/bin/ucode
-'use strict';
-import { readfile, writefile, mkdir } from 'fs';
-import { cursor } from 'uci';
-
-const uci = cursor();
-uci.load('homeproxy');
-uci.load('chinadns-ng');
-const cfg = uci.get_all('chinadns-ng', 'main') || {};
-const run = '/var/run/homeproxy-policy';
-mkdir(run);
-
-function lines(path) {
-	const data = readfile(path);
-	if (data === null)
-		die('Missing policy data: ' + path + '\n');
-	return filter(split(trim(data), /\n/), (s) => length(s));
-}
-
-function domains(path) {
-	const data = readfile(path) || '';
-	const result = [];
-	for (let line in split(data, /\n/)) {
-		line = lc(trim(line));
-		if (!length(line) || substr(line, 0, 1) === '#')
-			continue;
-		if (!match(line, /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/))
-			die('Only domain suffixes are supported in policy lists: ' + path + '\n');
-		push(result, line);
-	}
-	return uniq(result);
-}
-
-let groups = {
-	nodes: [],
-	blocked: domains('/etc/chinadns-ng/block-list.txt'),
-	direct: domains('/etc/homeproxy/resources/direct_list.txt'),
-	proxylist: domains('/etc/homeproxy/resources/proxy_list.txt')
-};
-uci.foreach('homeproxy', 'node', (node) => {
-	const host = lc(node.address || '');
-	if (match(host, /^[a-z0-9_-]+(\.[a-z0-9_-]+)+$/) &&
-	    !match(host, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/))
-		push(groups.nodes, host);
-});
-groups.nodes = uniq(groups.nodes);
-
-// Longest suffix wins in ChinaDNS. Remove lower-priority child exceptions,
-// rather than pretending declaration order overrides longer suffixes.
-function covered(domain, parents) {
-	for (let p in parents)
-		if (domain === p || substr(domain, -length(p) - 1) === '.' + p)
-			return true;
-	return false;
-}
-let higher = [];
-for (let key in ['nodes', 'blocked', 'direct', 'proxylist']) {
-	groups[key] = filter(groups[key], (d) => !covered(d, higher));
-	higher = [...higher, ...groups[key]];
-}
-let chn = filter(domains(cfg.chnlist_file || '/etc/chinadns-ng/chinalist.txt'), (d) => !covered(d, higher));
-let gfw = filter(domains(cfg.gfwlist_file || '/etc/chinadns-ng/gfwlist.txt'), (d) => !covered(d, higher));
-writefile(run + '/chnlist.txt', join('\n', chn) + '\n');
-writefile(run + '/gfwlist.txt', join('\n', gfw) + '\n');
-
-let conf = [
-	'bind-addr ' + (cfg.bind_addr || '127.0.0.1'),
-	'bind-port ' + (cfg.bind_port || '5353'),
-	'china-dns ' + (cfg.china_dns || '119.29.29.29'),
-	'trust-dns ' + (cfg.trust_dns || '127.0.0.1#5333'),
-	'chnlist-file ' + run + '/chnlist.txt',
-	'gfwlist-file ' + run + '/gfwlist.txt',
-	'ipset-name4 ' + (cfg.ipset_name4 || 'inet@hp_policy@cn4'),
-	'ipset-name6 ' + (cfg.ipset_name6 || 'inet@hp_policy@cn6'),
-	'add-tagchn-ip ' + (cfg.add_tagchn_ip || 'inet@hp_policy@domestic4,inet@hp_policy@domestic6'),
-	'add-taggfw-ip ' + (cfg.add_taggfw_ip || 'inet@hp_policy@gfw4,inet@hp_policy@gfw6'),
-	'default-tag ' + (cfg.default_tag || 'none'),
-	'hosts'
-];
-// Later declarations load first: nodes > blocked > direct > proxylist.
-for (let key in ['proxylist', 'direct', 'blocked', 'nodes']) {
-	if (!length(groups[key]))
-		continue;
-	writefile(run + '/' + key + '.txt', join('\n', groups[key]) + '\n');
-	push(conf, 'group ' + (key === 'blocked' ? 'null' : key));
-	push(conf, 'group-dnl ' + run + '/' + key + '.txt');
-	if (key === 'blocked')
-		continue;
-	push(conf, 'group-upstream ' + (key === 'proxylist' ? (cfg.trust_dns || '127.0.0.1#5333') : (cfg.china_dns || '119.29.29.29')));
-	push(conf, 'group-ipset inet@hp_policy@' + key + '4,inet@hp_policy@' + key + '6');
-	if (key === 'proxylist' && cfg.no_ipv6 === 'g')
-		push(conf, 'no-ipv6 tag:proxylist');
-}
-const ipv6_rules = { a: '', m: 'tag:chn', g: 'tag:gfw', n: 'tag:none', c: 'ip:china', t: 'ip:non_china' };
-if (cfg.no_ipv6 && cfg.no_ipv6 in ipv6_rules)
-	push(conf, 'no-ipv6' + (length(ipv6_rules[cfg.no_ipv6]) ? ' ' + ipv6_rules[cfg.no_ipv6] : ''));
-if (cfg.filter_unknown_ipv6 === '1')
-	push(conf, 'no-ipv6 tag:none@ip:non_china');
-for (let pair in [
-	['cache_size', 'cache'], ['verdict_cache_size', 'verdict-cache'],
-	['cache_stale', 'cache-stale'], ['cache_refresh', 'cache-refresh'],
-	['timeout_sec', 'timeout-sec'], ['repeat_times', 'repeat-times']
-]) {
-	if (cfg[pair[0]] && match(cfg[pair[0]], /^[0-9]+$/))
-		push(conf, pair[1] + ' ' + cfg[pair[0]]);
-}
-for (let pair in [
-	['chnlist_first', 'chnlist-first'], ['noip_as_chnip', 'noip-as-chnip'],
-	['reuse_port', 'reuse-port'], ['verbose', 'verbose']
-]) {
-	if (cfg[pair[0]] === '1')
-		push(conf, pair[1]);
-}
-writefile(run + '/chinadns.conf', join('\n', conf) + '\n');
-
-// This independent table survives fw4 reloads. Only marks cross the table
-// boundary; nftables sets cannot be referenced from another table.
-let nft = ['table inet hp_policy {'];
-for (let family in [4, 6]) {
-	for (let name in ['cn', 'nodes', 'direct', 'proxylist', 'domestic', 'gfw']) {
-		push(nft, 'set ' + name + family + ' { type ipv' + family + '_addr; flags interval; auto-merge;');
-		if (name === 'cn')
-			push(nft, 'elements = { ' + join(', ', lines('/etc/chinadns-ng/china' + family + '.txt')) + ' }');
-		push(nft, '}');
-	}
-}
-const self_mark = uci.get('homeproxy', 'infra', 'self_mark') || '100';
-if (!match(self_mark, /^[0-9]+$/))
-	die('Invalid HomeProxy self mark\n');
-push(nft, 'chain classify {');
-push(nft, 'meta mark ' + self_mark + ' return');
-push(nft, 'meta mark set meta mark & 0xcfffffff');
-push(nft, 'fib daddr type local return');
-push(nft, 'ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/4, 240.0.0.0/4 } return');
-push(nft, 'ip daddr @nodes4 meta mark set meta mark | 0x10000000 return');
-push(nft, 'ip daddr @direct4 meta mark set meta mark | 0x10000000 return');
-push(nft, 'ip daddr @proxylist4 meta mark set meta mark | 0x20000000 return');
-push(nft, 'ip daddr @gfw4 meta mark set meta mark | 0x20000000 return');
-push(nft, 'ip daddr @domestic4 meta mark set meta mark | 0x10000000 return');
-push(nft, 'ip daddr @cn4 meta mark set meta mark | 0x10000000 return');
-push(nft, 'meta mark set meta mark | 0x20000000');
-push(nft, '}');
-push(nft, 'chain prerouting { type filter hook prerouting priority -151; policy accept; meta nfproto ipv4 jump classify; }');
-push(nft, 'chain output { type route hook output priority -151; policy accept; meta nfproto ipv4 jump classify; }');
-push(nft, '}');
-writefile(run + '/table.nft', join('\n', nft) + '\n');
-POLICY_EOF
-
-cat > "$RUN/validate.uc" << 'VALIDATE_EOF'
-#!/usr/bin/ucode
-'use strict';
-import { readfile } from 'fs';
-const fw4 = require('fw4');
-const root = ARGV[0];
-for (let name in ['chinalist.txt', 'gfwlist.txt', 'china4.txt', 'china6.txt']) {
-	const data = readfile(root + '/' + name);
-	if (!data || !length(trim(data)))
-		die('Empty policy file: ' + name + '\n');
-	const entries = filter(split(trim(data), /\n/), (s) => length(s));
-	if (length(entries) < 100)
-		die('Truncated policy file: ' + name + '\n');
-	for (let entry in entries) {
-		if (substr(name, 0, 5) === 'china' && name !== 'chinalist.txt') {
-			const subnet = fw4.parse_subnet(entry)?.[0];
-			if (!subnet || subnet.family !== (name === 'china4.txt' ? 4 : 6))
-				die('Invalid CIDR in ' + name + '\n');
-		} else if (!match(entry, /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/)) {
-			die('Invalid domain in ' + name + '\n');
-		}
-	}
-}
-VALIDATE_EOF
-chmod +x "$RUN/policy.uc" "$RUN/validate.uc"
-echo "P11c policy.uc/validate.uc: OK"
-
-# --- P11d: patch HomeProxy — 外部 DNS 模式与分流标记 -----------------------
-# homeproxy 让出 dnsmasq 上游给 chinadns-ng, 自己只按 policy.uc 打的标记分流:
-#   0x10000000 直连 (节点域名/直连名单/国内段)
-#   0x20000000 代理 (代理名单/被墙名单)
-# 代理侧顺带屏蔽 UDP 443, 避免 QUIC 绕过隧道。
-HP="feeds/smpackage/luci-app-homeproxy"
-if [ -d "$HP" ] && command -v python3 >/dev/null 2>&1; then
-	python3 << 'PYEOF'
-import sys
-from pathlib import Path
-
-HP = Path("feeds/smpackage/luci-app-homeproxy")
-
-
-def patch(path, old, new, required=True):
-    text = path.read_text()
-    if old not in text:
-        if required:
-            sys.exit("anchor missing in %s: %r" % (path, old[:60]))
-        return
-    path.write_text(text.replace(old, new, 1))
-
-
-# 1) init.d/homeproxy: routing=custom 且开了外部 DNS 时, 把 dnsmasq 上游交给
-#    chinadns-ng, 并关掉 homeproxy 自己的缓存 (缓存统一在 chinadns-ng 那层)。
-init = HP / "root/etc/init.d/homeproxy"
-text = init.read_text()
-begin = text.index("\t\t# DNSMasq rules\n")
-end = text.index("\t\t# Setup routing table\n", begin)
-external = """\t\t# External DNS: ChinaDNS owns classification and dnsmasq upstream.
-\t\tif [ "$routing_mode" = custom ] && [ "$(uci -q get homeproxy.config.external_dns)" = "1" ]; then
-\t\t\trm -rf "$DNSMASQ_DIR/../dnsmasq-homeproxy.conf" "$DNSMASQ_DIR"
-\t\t\tfor server in $(uci -q get dhcp.@dnsmasq[0].server); do
-\t\t\t\tcase "$server" in /*) ;; *) uci -q del_list "dhcp.@dnsmasq[0].server=$server" ;; esac
-\t\t\tdone
-\t\t\tuci -q add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'
-\t\t\tuci -q set dhcp.@dnsmasq[0].noresolv='1'
-\t\t\tuci -q set dhcp.@dnsmasq[0].cachesize='0'
-\t\t\tuci -q commit dhcp
-\t\t\t/etc/init.d/chinadns-ng restart || return 1
-\t\t\t/etc/init.d/dnsmasq restart >/dev/null 2>&1
-\t\telse
-\t\t\tuci -q del_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'
-\t\t\tuci -q commit dhcp
-"""
-init.write_text(text[:begin] + external + text[begin:end] + "\t\tfi\n\n" + text[end:])
-
-# 2) generate_client.uc: 节点和 ECH 引导域名的解析不能依赖它们自己的隧道。
-gen = HP / "root/etc/homeproxy/scripts/generate_client.uc"
-patch(gen, "\t/* DNS rules */\n", """\t/* Node and ECH bootstrap must not depend on their own proxy tunnel. */
-\tif (uci.get(uciconfig, ucimain, 'external_dns') === '1') {
-\t\tlet bootstrap = [];
-\t\tuci.foreach(uciconfig, ucinode, (node) => {
-\t\t\tif (node.address)
-\t\t\t\tpush(bootstrap, node.address);
-\t\t\tif (node.tls_ech === '1' && node.tls_sni)
-\t\t\t\tpush(bootstrap, node.tls_sni);
-\t\t});
-\t\tif (length(bootstrap))
-\t\t\tpush(config.dns.rules, {domain: uniq(bootstrap), action: 'route', server: 'cfg-bootstrap_dns-dns'});
-\t}
-\t/* DNS rules */
-""")
-
-# 3) firewall_post.ut: 认 policy.uc 打的标记, 并挡掉代理侧 QUIC。
-fw = HP / "root/etc/homeproxy/scripts/firewall_post.ut"
-patch(fw,
-      "const dns_redirect = uci.get(cfgname, 'infra', 'dns_redirect') || '1';",
-      "const external_dns = routing_mode === 'custom' && uci.get(cfgname, 'config', 'external_dns') === '1';\n"
-      "const dns_redirect = uci.get(cfgname, 'infra', 'dns_redirect') || '1';")
-patch(fw, "chain dstnat {\n", """chain dstnat {
-{% if (external_dns): %}
-\tmeta iifname {{ array_to_nftarr(control_info.listen_interfaces || ['br-lan']) }} meta l4proto { tcp, udp } th dport 53 counter redirect to :53
-{% endif %}
-""")
-for chain, target in [("homeproxy_redirect", "homeproxy_redirect_proxy_port"),
-                      ("homeproxy_mangle_output", "homeproxy_mangle_mark")]:
-    anchor = "chain %s {\n\tmeta mark {{ self_mark }} counter return\n" % chain
-    extra = "{% if (external_dns): %}\n\tmeta mark & 0x10000000 != 0 counter return\n"
-    if chain == "homeproxy_mangle_output":
-        extra += "\tmeta mark & 0x20000000 != 0 udp dport 443 counter reject\n"
-    extra += "\tmeta mark & 0x20000000 != 0 counter goto %s\n{%% endif %%}\n" % target
-    patch(fw, anchor, anchor + extra)
-patch(fw, "chain homeproxy_mangle_prerouting {\n", """chain homeproxy_mangle_prerouting {
-{% if (external_dns): %}
-\tmeta mark & 0x10000000 != 0 counter return
-\tmeta mark & 0x20000000 != 0 udp dport 443 counter reject
-\tmeta mark & 0x20000000 != 0 counter goto homeproxy_mangle_tproxy_port
-{% endif %}
-""")
-
-# 4) client.js: 界面上给出开关。
-js = HP / "htdocs/luci-static/resources/view/homeproxy/client.js"
-patch(js,
-      "\t\to = s.taboption('routing', form.ListValue, 'routing_mode', _('Routing mode'));",
-      "\t\to = s.taboption('routing', form.Flag, 'external_dns', _('Use ChinaDNS-NG for DNS routing'));\n"
-      "\t\to.rmempty = false;\n"
-      "\t\to.depends('routing_mode', 'custom');\n\n"
-      "\t\to = s.taboption('routing', form.ListValue, 'routing_mode', _('Routing mode'));")
-
-print("P11d homeproxy patched")
-PYEOF
-	echo "P11d homeproxy: OK"
+if build_chinalist; then
+	echo "P11 chinalist: OK ($(wc -l < "$CDNG/chinalist.txt") 行)"
 else
-	echo "P11d homeproxy: SKIP (fork not present)"
+	echo "P11 chinalist: FETCH FAILED"
 fi
 
-# --- P11e: config/homeproxy 默认值 ---------------------------------------
-# 首次刷机即走外部 DNS; 已有配置 (sysupgrade 保留) 不受影响。
-HPCFG="feeds/smpackage/luci-app-homeproxy/root/etc/config/homeproxy"
-if [ -f "$HPCFG" ]; then
-	sed -i "s#^\toption external_dns '.*'#\toption external_dns '1'#" "$HPCFG"
-	grep -q "^config homeproxy 'config'" "$HPCFG" && \
-		! grep -q "option external_dns" "$HPCFG" && \
-		sed -i "/^config homeproxy 'config'/a\\\toption external_dns '1'" "$HPCFG"
-	grep -q "option external_dns '1'" "$HPCFG" 2>/dev/null \
-		&& echo "P11e homeproxy external_dns=1: OK" || echo "P11e homeproxy: CHECK MANUALLY"
+if fetch "https://fastly.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/gfw.txt" "$CDNG/gfwlist.txt" \
+   && [ "$(wc -l < "$CDNG/gfwlist.txt")" -ge 100 ]; then
+	echo "P11 gfwlist: OK ($(wc -l < "$CDNG/gfwlist.txt") 行)"
+else
+	echo "P11 gfwlist: FETCH FAILED"
 fi
 
-# --- P11f: dnsmasq 上游 (首次刷机; 运行时由 homeproxy init 接管) -----------
-DHCP="package/base-files/files/etc/config/dhcp"
-if [ -f "$DHCP" ]; then
-	sed -i '/^\toption server .127.0.0.1#5353./d' "$DHCP"
-	sed -i '/^config dnsmasq/a\	list server '\''127.0.0.1#5353'\''\n\toption noresolv 1' "$DHCP"
-	grep -q "127.0.0.1#5353" "$DHCP" 2>/dev/null \
-		&& echo "P11f dnsmasq->chinadns-ng: OK" || echo "P11f dnsmasq: WRITE FAILED"
+if fetch "https://ispip.clang.cn/all_cn.txt" "$CDNG/chnroute.txt" \
+   && [ "$(wc -l < "$CDNG/chnroute.txt")" -ge 100 ]; then
+	echo "P11 chnroute: OK ($(wc -l < "$CDNG/chnroute.txt") 行)"
+else
+	echo "P11 chnroute: FETCH FAILED"
+fi
+
+if fetch "https://ispip.clang.cn/all_cn_ipv6.txt" "$CDNG/chnroute6.txt" \
+   && [ "$(wc -l < "$CDNG/chnroute6.txt")" -ge 10 ]; then
+	echo "P11 chnroute6: OK ($(wc -l < "$CDNG/chnroute6.txt") 行)"
+else
+	echo "P11 chnroute6: FETCH FAILED"
+fi
+
+# --- patch HomeProxy: 开关 + 让出上游 + 认 mark + 节点自举 ----------------
+# 用 sed/awk 改, 与本脚本其余部分 (P5/P6/P9) 保持一致。
+HPCONF="$HPDIR/root/etc/config/homeproxy"
+HPINIT="$HPDIR/root/etc/init.d/homeproxy"
+HPFW="$HPDIR/root/etc/homeproxy/scripts/firewall_post.ut"
+HPGEN="$HPDIR/root/etc/homeproxy/scripts/generate_client.uc"
+HPJS="$HPDIR/htdocs/luci-static/resources/view/homeproxy/client.js"
+
+# 在锚点前插入, 锚点不存在则报错退出, 避免静默失效
+insert_before() {
+	FILE="$1"; ANCHOR="$2"; FILE_TMP="$1.p11tmp"
+	grep -qF "$ANCHOR" "$FILE" || { echo "P11 anchor missing: $FILE ($ANCHOR)" >&2; return 1; }
+	cat "$FILE_TMP" > "$FILE"
+	rm -f "$FILE_TMP"
+}
+
+if [ -d "$HPDIR" ]; then
+
+# 1) init.d/homeproxy: dns_routing=chinadns 时让 homeproxy 交出 dnsmasq 上游,
+#    自己拉起 chinadns-ng。参数结构照抄 passwall 的 run_chinadns_ng。
+
+sed -n '1,/# DNSMasq rules/p' "$HPINIT" | sed '$d' > "$HPINIT.p11tmp"
+cat >> "$HPINIT.p11tmp" << 'CDNG_BLOCK'
+		# DNS 分流交给 chinadns-ng (可选), 参数结构同 passwall。
+		if [ "$(uci -q get homeproxy.config.dns_routing)" = "chinadns" ]; then
+			local _cdng_port=5353 _cdng_china _cdng_trust _i=0
+			config_get _cdng_china "config" "dns_china" "119.29.29.29"
+			config_get _cdng_trust "config" "dns_trust" "127.0.0.1#$dns_port"
+			# 等 sing-box 的 DNS 就绪再问可信上游, 否则污染结果会被缓存
+			while [ $_i -lt 30 ]; do
+				netstat -tln 2>/dev/null | grep -q ":$dns_port " && break
+				sleep 1; _i=$((_i + 1))
+			done
+			procd_open_instance chinadns-ng
+			procd_set_param command /usr/bin/chinadns-ng -v -b 127.0.0.1 -l $_cdng_port \
+				-c "$_cdng_china" -t "$_cdng_trust" \
+				-4 /etc/chinadns-ng/chnroute -6 /etc/chinadns-ng/chnroute6 \
+				-m /etc/chinadns-ng/chinalist.txt -M -a \
+				-g /etc/chinadns-ng/gfwlist.txt \
+				-f -N tag:gfw --cache 4096 --cache-db /var/run/chinadns-ng.cache
+			procd_set_param respawn
+			procd_close_instance
+			rm -rf "$DNSMASQ_DIR/../dnsmasq-homeproxy.conf" "$DNSMASQ_DIR"
+			for server in $(uci -q get dhcp.@dnsmasq[0].server); do
+				case "$server" in /*) ;; *) uci -q del_list "dhcp.@dnsmasq[0].server=$server" ;; esac
+			done
+			uci -q add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'
+			uci -q set dhcp.@dnsmasq[0].noresolv='1'
+			uci -q set dhcp.@dnsmasq[0].cachesize='0'
+			uci -q commit dhcp
+			/etc/init.d/dnsmasq restart >/dev/null 2>&1
+		else
+CDNG_BLOCK
+# 原块尾部的 fi 要在 else 之后闭合
+sed -n '/# DNSMasq rules/,/# Setup routing table/p' "$HPINIT" | sed '1d;$d' >> "$HPINIT.p11tmp"
+printf '\t\tfi\n\n' >> "$HPINIT.p11tmp"
+sed -n '/# Setup routing table/,$p' "$HPINIT" >> "$HPINIT.p11tmp"
+insert_before "$HPINIT" "# Setup routing table" || exit 1
+
+# 2) firewall_post.ut: 认 chinadns-ng 的 nft 集合, 并挡掉代理侧 QUIC。
+sed -i "s#^\(\t*const routing_mode = uci.get(cfgname, 'config', 'routing_mode'\) .*#\1\n\tconst chinadns = routing_mode === 'custom' \&\& (uci.get(cfgname, 'config', 'dns_routing') || 'native') === 'chinadns';#" "$HPFW"
+for pair in "homeproxy_redirect:homeproxy_redirect_proxy_port" \
+            "homeproxy_mangle_prerouting:homeproxy_mangle_tproxy_port" \
+            "homeproxy_mangle_output:homeproxy_mangle_mark"; do
+	chain="${pair%%:*}"; target="${pair##*:}"
+	grep -qF "chain $chain {" "$HPFW" || { echo "P11 firewall anchor missing: $chain" >&2; exit 1; }
+	sed -i "/^chain $chain {$/a\\
+\\\\t\tmeta mark \& 0x10000000 != 0 counter return\\
+\\\\t\tmeta mark \& 0x20000000 != 0 udp dport 443 counter reject\\
+\\\\t\tmeta mark \& 0x20000000 != 0 counter goto $target" "$HPFW"
+	# 只在 chinadns 模式下生效
+	sed -i "/^\t\tmeta mark \& 0x10000000 != 0 counter return$/i\\
+{% if (chinadns): %}" "$HPFW"
+	sed -i "/^\t\tmeta mark \& 0x20000000 != 0 counter goto $target$/a\\
+{% endif %}" "$HPFW"
+done
+
+# 3) generate_client.uc: 节点和 ECH 域名不能依赖它们自己的隧道。
+grep -qF '	/* DNS rules */' "$HPGEN" || { echo "P11 generator anchor missing" >&2; exit 1; }
+awk '
+/^\t\/\* DNS rules \*\/$/ && !done {
+	print "\t/* Node and ECH bootstrap must not depend on their own proxy tunnel. */"
+	print "\tif (routing_mode === \x27custom\x27 && (uci.get(uciconfig, ucimain, \x27dns_routing\x27) || \x27native\x27) === \x27chinadns\x27) {"
+	print "\t\tlet bootstrap = [];"
+	print "\t\tuci.foreach(uciconfig, ucinode, (node) => {"
+	print "\t\t\tif (node.address)"
+	print "\t\t\t\tpush(bootstrap, node.address);"
+	print "\t\t\tif (node.tls_ech === \x271\x27 && node.tls_sni)"
+	print "\t\t\t\tpush(bootstrap, node.tls_sni);"
+	print "\t\t});"
+	print "\t\tif (length(bootstrap))"
+	print "\t\t\tpush(config.dns.rules, {domain: uniq(bootstrap), action: \x27route\x27, server: \x27cfg-bootstrap_dns-dns\x27});"
+	print "\t}"
+	done = 1
+}
+{ print }
+' "$HPGEN" > "$HPGEN.p11tmp" && mv "$HPGEN.p11tmp" "$HPGEN"
+
+# 4) client.js: 界面上给开关, 位置同 ssr-plus 的 Resolve Dns Mode。
+grep -qF "s.taboption('routing', form.ListValue, 'routing_mode'" "$HPJS" \
+	|| { echo "P11 client.js anchor missing" >&2; exit 1; }
+awk '
+/^\t\to = s\.taboption\(.routing., form\.ListValue, .routing_mode./ && !done {
+	print "\t\to = s.taboption(\x27routing\x27, form.ListValue, \x27dns_routing\x27, _(\x27DNS routing\x27));"
+	print "\t\to.value(\x27native\x27, _(\x27HomeProxy built-in\x27));"
+	print "\t\to.value(\x27chinadns\x27, _(\x27chinadns-ng (anti-pollution)\x27));"
+	print "\t\to.default = \x27native\x27;"
+	print "\t\to.depends(\x27routing_mode\x27, \x27custom\x27);"
+	print ""
+	done = 1
+}
+{ print }
+' "$HPJS" > "$HPJS.p11tmp" && mv "$HPJS.p11tmp" "$HPJS"
+
+# 5) config: 默认 native, 上游行为完全不变。
+sed -i "s#^config homeproxy 'config'\$#config homeproxy 'config'\n\toption dns_routing 'native'\n\toption dns_china '119.29.29.29'#" "$HPCONF"
+grep -q "option dns_routing 'native'" "$HPCONF" || { echo "P11 config anchor missing" >&2; exit 1; }
+
+	echo "P11 homeproxy patch: OK"
+else
+	echo "P11 homeproxy patch: SKIP (fork missing)"
 fi
 
 echo "=== P11 done ==="
