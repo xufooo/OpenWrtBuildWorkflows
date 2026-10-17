@@ -451,14 +451,6 @@ config routing_rule
 	option action 'route'
 	option outbound 'direct-out'
 
-# Explicit GFW domains precede broad CN IP matches.
-config routing_rule
-	option label 'Proxy GFW Domains'
-	option enabled '1'
-	list rule_set 'gfw'
-	option action 'route'
-	option outbound 'proxy_out'
-
 # 06 国内 IP 直连
 config routing_rule
 	option label '05 Direct CN IP'
@@ -1035,14 +1027,13 @@ gen_chinadns_lists() {
 		: > "$_f"
 	done
 
-	# routing_rule 既有匿名 section (@routing_rule[N]) 也有命名 section (dns_*), 都要遍历。
-	for _rule in $(uci -q show homeproxy \
-			| grep -E '^(homeproxy\.(@routing_rule\[[0-9]+\]|dns_[a-z]+)\.label=)' \
-			| grep -oE '@routing_rule\[[0-9]+\]|dns_[a-z]+'); do
+	# Only the three unconditional DNS lists can classify DNS queries.
+	# Ordinary routing rules may have source/port predicates DNS cannot honor.
+	for _rule in dns_block dns_direct dns_proxy; do
 		[ "$(uci -q get homeproxy.$_rule.enabled)" = "1" ] || continue
 		_act=$(uci -q get homeproxy.$_rule.action)
 		_out=$(uci -q get homeproxy.$_rule.outbound)
-		_dom=$(uci -q get homeproxy.$_rule.domain)
+		_dom="$(uci -q get homeproxy.$_rule.domain) $(uci -q get homeproxy.$_rule.domain_suffix)"
 		[ -n "$_dom" ] || continue
 
 		case "$_act" in
@@ -1059,7 +1050,7 @@ gen_chinadns_lists() {
 
 		# domain 字段是空格分隔的多个域名
 		for _d in $_dom; do
-			echo "$_d" >> "$_target"
+			printf '%s\n' "$_d" | awk '{d=tolower($0); sub(/^\.+/, "", d); sub(/\.+$/, "", d); if (length(d)) print d}' >> "$_target"
 		done
 	done
 
@@ -1140,6 +1131,7 @@ gen_chinadns_lists() {
 			procd_append_param command $_cdng_args -f
 			procd_set_param respawn
 			procd_close_instance
+			save_chinadns_dnsmasq || return 1
 			rm -rf "$DNSMASQ_DIR/../dnsmasq-homeproxy.conf" "$DNSMASQ_DIR"
 			for server in $(uci -q get dhcp.@dnsmasq[0].server); do
 				case "$server" in /*) ;; *) uci -q del_list "dhcp.@dnsmasq[0].server=$server" ;; esac
@@ -1181,7 +1173,7 @@ awk '
 	print "				push(bootstrap, node.tls_sni);"
 	print "		});"
 	print "\t\tif (length(bootstrap))"
-	print "		/* default-dns 是硬编码 IP + direct-out 的上游, 不依赖任何节点, 用它做 bootstrap。*/"
+	print "		/* default-dns uses WAN DNS + direct-out and does not depend on a proxy node. */"
 	print "			push(config.dns.rules, {domain: uniq(bootstrap), action: \x27route\x27, server: \x27default-dns\x27});"
 	print "\t}"
 	done = 1
@@ -1267,10 +1259,8 @@ text = generator.read_text()
 assert text.count("import { readfile, writefile } from 'fs';") == 1
 text = text.replace("import { readfile, writefile } from 'fs';", "import { readfile, writefile, mkdir } from 'fs';")
 text = text.replace("system('mkdir -p ' + RUN_DIR);", 'mkdir(RUN_DIR);')
+# Keep default-dns on the upstream WAN DNS, as verified on the router.
 assert text.count('\t\t\tserver: wan_dns,') == 1
-text = text.replace('\t\t\tserver: wan_dns,', '''\t\t\tserver: (routing_mode === 'custom' && uci.get(uciconfig, ucimain, 'dns_routing') === 'chinadns')
-\t\t\t\t? (validation('ip4addr', uci.get(uciconfig, ucimain, 'dns_china')) ? uci.get(uciconfig, ucimain, 'dns_china') : '119.29.29.29')
-\t\t\t\t: wan_dns,''', 1)
 
 # This is DomainResolveOptions, not a route action in sing-box 1.12.
 text = text.replace("\t\taction: 'resolve',\n\t\tserver: get_resolver(default_outbound_dns)",
@@ -1324,8 +1314,20 @@ ordered = '''
 \t\tlet cfg = uci.get_all(uciconfig, name);
 \t\tif (!cfg)
 \t\t\tcontinue;
-\t\tlet domains = type(cfg.domain) === 'array' ? cfg.domain : [cfg.domain || ''];
-\t\tif (length(filter(domains, (domain) => length(trim(domain)))))
+\t\tlet domains = [];
+\t\tfor (let field in ['domain', 'domain_suffix']) {
+\t\t\tlet values = type(cfg[field]) === 'array' ? cfg[field] : [cfg[field] || ''];
+\t\t\tfor (let value in values)
+\t\t\t\tfor (let domain in split(value, /\\s+/)) {
+\t\t\t\t\tdomain = replace(lc(trim(domain)), /^\\.+|\\.+$/g, '');
+\t\t\t\t\tif (length(domain))
+\t\t\t\t\t\tpush(domains, domain);
+\t\t\t\t}
+\t\t}
+\t\t// These three lists use ChinaDNS suffix semantics, including subdomains.
+\t\tcfg.domain = null;
+\t\tcfg.domain_suffix = uniq(domains);
+\t\tif (length(domains))
 \t\t\tadd_routing_rule(cfg);
 \t}
 \tuci.foreach(uciconfig, uciroutingrule, (cfg) => {
@@ -1354,7 +1356,7 @@ chunks['proxy'] = chunks['proxy'].replace('\t\t\t}\n', '''\t\t\t\tcase "$_cdng_n
 # ChinaDNS loads later-declared groups first: block > direct > proxy.
 source = source[:start] + ''.join(chunks[name] for name in ['proxy', 'direct', 'block']) + source[end:]
 old = '\t\t\t[ -f "$HP_DIR/resources/china_list.txt" ] && _cdng_args="$_cdng_args -m $HP_DIR/resources/china_list.txt -M -a"\n\t\t\t[ -f "$HP_DIR/resources/gfw_list.txt" ] && _cdng_args="$_cdng_args -g $HP_DIR/resources/gfw_list.txt"'
-new = '''\t\t\t_cdng_args="$_cdng_args -m $RUN_DIR/china_list.filtered -g $RUN_DIR/gfw_list.filtered"
+new = '''\t\t\t_cdng_args="$_cdng_args -m $RUN_DIR/china_list.filtered -M -g $RUN_DIR/gfw_list.filtered"
 \t\t\t# Do not expand the static China CIDR database with learned CDN IPs.
 '''.rstrip()
 assert source.count(old) == 1
@@ -1367,8 +1369,8 @@ source = source.replace(marker, '\t\t\tgen_chinadns_lists || return 1\n', 1)
 marker = '\t_ipset_load chnroute6 "$HP_DIR/resources/china_ip6.txt"\n'
 assert source.count(marker) == 1
 source = source.replace(marker, marker + '''
-\t# User suffix overrides beat built-in child exceptions. GFW suffixes also
-\t# exclude domestic child entries (e.g. Chrome update endpoints marked @cn).
+\t# User suffix overrides beat built-in child exceptions; preserve the
+\t# upstream China/GFW relationship and longest-suffix exceptions otherwise.
 \t[ -s "$HP_DIR/resources/china_list.txt" ] && [ -s "$HP_DIR/resources/gfw_list.txt" ] || return 1
 \tcat "$_block" "$_direct" "$_proxy" > "$RUN_DIR/user_overrides.txt"
 \t_filter_domains() {
@@ -1379,24 +1381,110 @@ source = source.replace(marker, marker + '''
 \t\t    sub(/^[^.]*\\./, "", d)
 \t\t  } if (!reject && length($0)) print $0 }' "$1" "$2"
 \t}
-\t_filter_domains "$RUN_DIR/user_overrides.txt" "$HP_DIR/resources/gfw_list.txt" > "$RUN_DIR/gfw_list.filtered"
-\tcat "$RUN_DIR/user_overrides.txt" "$HP_DIR/resources/gfw_list.txt" > "$RUN_DIR/china_exclusions.txt"
-\t_filter_domains "$RUN_DIR/china_exclusions.txt" "$HP_DIR/resources/china_list.txt" > "$RUN_DIR/china_list.filtered"
+\t# Match sing-box's block > direct > proxy order even for parent/child overlaps.
+\t_filter_domains "$_block" "$_direct" > "$_direct.tmp" && mv "$_direct.tmp" "$_direct" || return 1
+\tcat "$_block" "$_direct" > "$RUN_DIR/user_priority.txt"
+\t_filter_domains "$RUN_DIR/user_priority.txt" "$_proxy" > "$_proxy.tmp" && mv "$_proxy.tmp" "$_proxy" || return 1
+\t_filter_domains "$RUN_DIR/user_overrides.txt" "$HP_DIR/resources/gfw_list.txt" > "$RUN_DIR/gfw_list.filtered" || return 1
+\t_filter_domains "$RUN_DIR/user_overrides.txt" "$HP_DIR/resources/china_list.txt" > "$RUN_DIR/china_list.filtered" || return 1
 ''', 1)
 source = source.replace('[ -s "$_src" ] || return 0', '[ -s "$_src" ] || return 1')
 source = source.replace('| ipset restore -exist 2>/dev/null', '| ipset restore -exist 2>/dev/null || return 1')
 source = source.replace('_ipset_load chnroute "$HP_DIR/resources/china_ip4.txt"', '_ipset_load chnroute "$HP_DIR/resources/china_ip4.txt" || return 1')
 source = source.replace('_ipset_load chnroute6 "$HP_DIR/resources/china_ip6.txt"', '_ipset_load chnroute6 "$HP_DIR/resources/china_ip6.txt" || return 1')
 source = source.replace('"tag:gfw"', '"tag:gfw,tag:none@ip:non_china"')
-# Native mode must remove the UCI upstream left by an earlier ChinaDNS run.
-source, count = re.subn(r'\t\telse\n(?:\n|\t\t# DNSMasq rules\n)*(?=\t\tlocal ipv6_support dns_port)', '''\t\telse
-\t\t\tlocal _old_cdng_port
-\t\t\tconfig_get _old_cdng_port config dns_chinadns_port 5353
-\t\t\tuci -q del_list "dhcp.@dnsmasq[0].server=127.0.0.1#$_old_cdng_port"
-\t\t\tuci -q commit dhcp
-''', source, count=1)
-assert count == 1
+# A persistent snapshot survives reboot and sysupgrade; only the three
+# dnsmasq options owned by this integration are restored, never all of DHCP.
+dnsmasq_state = r'''
+save_chinadns_dnsmasq() (
+\tumask 077
+\tuci -q -c "$HP_DIR" revert dnsmasq_backup
+\tif [ -s "$HP_DIR/dnsmasq_backup" ]; then
+\t\tuci -q -c "$HP_DIR" get dnsmasq_backup.original.section >/dev/null
+\t\treturn $?
+\tfi
+\tlocal _option _value _server
+\tuci -q -c "$HP_DIR" set dnsmasq_backup.original=options || return 1
+\tuci -q -c "$HP_DIR" set "dnsmasq_backup.original.section=$DNSMASQ_UCI_CONFIG" || return 1
+\tfor _option in noresolv cachesize; do
+\t\tif _value=$(uci -q get "dhcp.$DNSMASQ_UCI_CONFIG.$_option"); then
+\t\t\tuci -q -c "$HP_DIR" set "dnsmasq_backup.original.has_$_option=1" || return 1
+\t\t\tuci -q -c "$HP_DIR" set "dnsmasq_backup.original.$_option=$_value" || return 1
+\t\tfi
+\tdone
+\tfor _server in $(uci -q get "dhcp.$DNSMASQ_UCI_CONFIG.server"); do
+\t\tuci -q -c "$HP_DIR" add_list "dnsmasq_backup.original.server=$_server" || return 1
+\tdone
+\tuci -q -c "$HP_DIR" commit dnsmasq_backup
+)
+
+restore_chinadns_dnsmasq() {
+\tlocal _section _option _value _server _port _changed=0
+\tuci -q -c "$HP_DIR" revert dnsmasq_backup
+\t_section=$(uci -q -c "$HP_DIR" get dnsmasq_backup.original.section)
+\tif [ -n "$_section" ]; then
+\t\t# Do not apply an old instance's settings to another dnsmasq instance.
+\t\t[ "$(uci -q get "dhcp.$_section")" = dnsmasq ] || return 1
+\t\tfor _option in server noresolv cachesize; do
+\t\t\tuci -q delete "dhcp.$_section.$_option"
+\t\tdone
+\t\tfor _option in noresolv cachesize; do
+\t\t\tif [ "$(uci -q -c "$HP_DIR" get "dnsmasq_backup.original.has_$_option")" = 1 ]; then
+\t\t\t\t_value=$(uci -q -c "$HP_DIR" get "dnsmasq_backup.original.$_option")
+\t\t\t\tuci -q set "dhcp.$_section.$_option=$_value" || return 1
+\t\t\tfi
+\t\tdone
+\t\tfor _server in $(uci -q -c "$HP_DIR" get dnsmasq_backup.original.server); do
+\t\t\tuci -q add_list "dhcp.$_section.server=$_server" || return 1
+\t\tdone
+\t\tuci -q commit dhcp || return 1
+\t\tuci -q -c "$HP_DIR" delete dnsmasq_backup.original
+\t\tuci -q -c "$HP_DIR" commit dnsmasq_backup || return 1
+\t\t_changed=1
+\telse
+\t\t# Older firmware saved no original state. Recognize only its exact
+\t\t# override signature, remove the dead local upstream and recover WAN DNS.
+\t\t_port=$(uci -q get homeproxy.config.dns_chinadns_port)
+\t\t_port=${_port:-5353}
+\t\tif [ "$(uci -q get dhcp.@dnsmasq[0].noresolv)" = 1 ] &&
+\t\t   [ "$(uci -q get dhcp.@dnsmasq[0].cachesize)" = 0 ]; then
+\t\t\tfor _server in $(uci -q get dhcp.@dnsmasq[0].server); do
+\t\t\t\t[ "$_server" = "127.0.0.1#$_port" ] || continue
+\t\t\t\tuci -q del_list "dhcp.@dnsmasq[0].server=$_server" || return 1
+\t\t\t\tuci -q delete dhcp.@dnsmasq[0].noresolv
+\t\t\t\tuci -q delete dhcp.@dnsmasq[0].cachesize
+\t\t\t\tuci -q commit dhcp || return 1
+\t\t\t\t_changed=1
+\t\t\t\tbreak
+\t\t\tdone
+\t\tfi
+\tfi
+\tif [ "$_changed" = 1 ] && [ "${1:-}" = restart ]; then
+\t\t/etc/init.d/dnsmasq restart >/dev/null 2>&1
+\tfi
+\treturn 0
+}
+
+'''.replace(r'\t', '\t')
+assert source.count('start_service() {\n') == 1
+source = source.replace('start_service() {\n', dnsmasq_state + 'start_service() {\n', 1)
+source = source.replace('start_service() {\n\tconfig_load "$CONF"',
+                        'start_service() {\n\tconfig_load "$CONF"\n\trestore_chinadns_dnsmasq restart || return 1', 1)
+source = source.replace('\t# Remove DNS hijack\n',
+                        '\t# Remove DNS hijack\n\trestore_chinadns_dnsmasq || return 1\n', 1)
 init.write_text(source)
+
+makefile = package / 'Makefile'
+content = makefile.read_text()
+assert content.count('/etc/homeproxy/certs/\n') == 1
+makefile.write_text(content.replace('/etc/homeproxy/certs/\n', '/etc/homeproxy/certs/\n/etc/homeproxy/dnsmasq_backup\n', 1))
+(package / 'root/etc/homeproxy/dnsmasq_backup').write_text('')
+
+# Explain the fixed-list semantics without changing ordinary routing rules.
+client = package / 'htdocs/luci-static/resources/view/homeproxy/client.js'
+content = client.read_text()
+content = content.replace("_('Match full domain.'))", "_('Match full domain. The three DNS list rules also include subdomains.'))", 1)
+client.write_text(content)
 
 # Build defaults have one definition per named UCI section. Preserve the
 # template's last definition instead of appending duplicate named sections.

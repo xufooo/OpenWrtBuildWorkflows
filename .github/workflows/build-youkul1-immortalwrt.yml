@@ -205,7 +205,7 @@ jobs:
           listing=$(mktemp)
           trap 'rm -f "$listing"' EXIT
           unsquashfs -l -o "$off" "$img" > "$listing"
-          for file in usr/bin/chinadns-ng usr/bin/sing-box usr/sbin/ipset etc/init.d/homeproxy etc/config/homeproxy; do
+          for file in usr/bin/chinadns-ng usr/bin/sing-box usr/sbin/ipset etc/init.d/homeproxy etc/config/homeproxy etc/homeproxy/dnsmasq_backup; do
             grep -Fqx "squashfs-root/$file" "$listing" \
               || { echo "Required firmware file missing: $file"; exit 1; }
           done
@@ -240,6 +240,60 @@ jobs:
               --group-dnl /etc/homeproxy/resources/gfw_list.txt \
               --group-upstream '127.0.0.1#5333' -N tag:proxylist \
               -N 'tag:gfw,tag:none@ip:non_china' --cache 4096 -V
+          # Exercise snapshot/restore with the packaged UCI, in the extracted copy.
+          python3 - "$rootfs" <<'PY'
+          from pathlib import Path
+          import sys
+          root = Path(sys.argv[1])
+          init = (root / 'etc/init.d/homeproxy').read_text()
+          helpers = init[init.index('save_chinadns_dnsmasq()'):init.index('start_service()')]
+          (root / 'etc/config/dhcp').write_text("config dnsmasq 'ci_dnsmasq'\n\toption domain 'lan'\n")
+          (root / 'tmp/check-dns-state.sh').write_text('''#!/bin/sh
+          set -eu
+          HP_DIR=/etc/homeproxy
+          DNSMASQ_UCI_CONFIG=ci_dnsmasq
+          uci() { /usr/bin/qemu-mipsel-static /sbin/uci "$@"; }
+          ''' + helpers + '''
+          uci set dhcp.ci_dnsmasq.noresolv=0
+          uci set dhcp.ci_dnsmasq.cachesize=777
+          uci add_list dhcp.ci_dnsmasq.server=192.0.2.53
+          uci add_list dhcp.ci_dnsmasq.server=/lan/192.0.2.54
+          uci commit dhcp
+          save_chinadns_dnsmasq || exit 1
+          uci delete dhcp.ci_dnsmasq.server
+          uci add_list 'dhcp.ci_dnsmasq.server=127.0.0.1#5353'
+          uci set dhcp.ci_dnsmasq.noresolv=1
+          uci set dhcp.ci_dnsmasq.cachesize=0
+          uci commit dhcp
+          restore_chinadns_dnsmasq || exit 1
+          test "$(uci get dhcp.ci_dnsmasq.server)" = '192.0.2.53 /lan/192.0.2.54'
+          test "$(uci get dhcp.ci_dnsmasq.noresolv)" = 0
+          test "$(uci get dhcp.ci_dnsmasq.cachesize)" = 777
+          test "$(uci get dhcp.ci_dnsmasq.domain)" = lan
+          for option in server noresolv cachesize; do uci delete "dhcp.ci_dnsmasq.$option"; done
+          uci commit dhcp
+          save_chinadns_dnsmasq || exit 1
+          uci add_list 'dhcp.ci_dnsmasq.server=127.0.0.1#5353'
+          uci set dhcp.ci_dnsmasq.noresolv=1
+          uci set dhcp.ci_dnsmasq.cachesize=0
+          uci commit dhcp
+          restore_chinadns_dnsmasq || exit 1
+          for option in server noresolv cachesize; do
+              if uci -q get "dhcp.ci_dnsmasq.$option"; then exit 1; fi
+          done
+          # Migrate only the old integration's fingerprint, retaining local DNS.
+          uci add_list 'dhcp.ci_dnsmasq.server=127.0.0.1#5353'
+          uci add_list dhcp.ci_dnsmasq.server=/lan/192.0.2.54
+          uci set dhcp.ci_dnsmasq.noresolv=1
+          uci set dhcp.ci_dnsmasq.cachesize=0
+          uci commit dhcp
+          restore_chinadns_dnsmasq || exit 1
+          test "$(uci get dhcp.ci_dnsmasq.server)" = /lan/192.0.2.54
+          if uci -q get dhcp.ci_dnsmasq.noresolv; then exit 1; fi
+          if uci -q get dhcp.ci_dnsmasq.cachesize; then exit 1; fi
+          ''')
+          PY
+          target /bin/sh /tmp/check-dns-state.sh
           # Public fixture in the extracted copy only; never embedded in firmware.
           target /sbin/uci set homeproxy.ci_node=node
           target /sbin/uci set homeproxy.ci_node.type=socks
@@ -247,8 +301,9 @@ jobs:
           target /sbin/uci set homeproxy.ci_node.port=9
           target /sbin/uci set homeproxy.proxy_out.node=ci_node
           target /sbin/uci set homeproxy.routing.default_outbound=proxy_out
-          target /sbin/uci set homeproxy.dns_block.domain=blocked.example
+          target /sbin/uci set homeproxy.dns_block.domain=.Blocked.Example.
           target /sbin/uci set homeproxy.dns_proxy.domain=proxy.example
+          target /sbin/uci add_list homeproxy.dns_direct.domain_suffix=direct.example
           target /sbin/uci commit homeproxy
           target /usr/bin/ucode -S /etc/homeproxy/scripts/generate_client.uc
           target /usr/bin/sing-box check -c /var/run/homeproxy/sing-box-c.json
@@ -256,9 +311,9 @@ jobs:
           import json, sys
           config = json.load(open(sys.argv[1]))
           rules = config['route']['rules']
-          block = next(i for i, r in enumerate(rules) if r.get('domain') in ('blocked.example', ['blocked.example']))
+          block = next(i for i, r in enumerate(rules) if r.get('domain_suffix') == ['blocked.example'])
           assert rules[block]['action'] == 'reject'
-          proxy = next(i for i, r in enumerate(rules) if r.get('domain') in ('proxy.example', ['proxy.example']))
+          proxy = next(i for i, r in enumerate(rules) if r.get('domain_suffix') == ['proxy.example'])
           reject = rules[proxy - 1]
           assert block < proxy
           assert reject['type'] == 'logical' and reject['action'] == 'reject'
@@ -266,13 +321,53 @@ jobs:
           assert not any(r.get('domain') == '' for r in rules)
           fallback = next(i for i, r in enumerate(rules) if r.get('action') == 'route' and r.get('outbound') == 'direct-out' and set(r) == {'action', 'outbound'})
           assert proxy < fallback
+          direct = next(i for i, r in enumerate(rules) if r.get('domain_suffix') == ['direct.example'])
+          assert block < direct < proxy
+          assert rules[direct]['outbound'] == 'direct-out'
+          assert next(s for s in config['dns']['servers'] if s['tag'] == 'default-dns')['server'] == '223.5.5.5'
           assert 'action' not in config['route']['default_domain_resolver']
+          PY
+          # Exercise the generated list builder; kernel ipset operations are
+          # stubbed here, while the list extraction uses the packaged MIPS UCI.
+          python3 - "$rootfs" <<'PY'
+          from pathlib import Path
+          import sys
+          root = Path(sys.argv[1])
+          init = (root / 'etc/init.d/homeproxy').read_text()
+          start = init.index('gen_chinadns_lists() {')
+          end = init.index('\n}\n', start) + 3
+          helper = init[start:end].replace('local _dir=/etc/chinadns-ng', 'local _dir="$RUN_DIR/ci-chinadns"')
+          (root / 'tmp/check-domain-lists.sh').write_text(helper)
+          PY
+          check_domain_lists() (
+              HP_DIR="$rootfs/etc/homeproxy"
+              RUN_DIR="$rootfs/tmp/run/homeproxy"
+              uci() { target /sbin/uci "$@"; }
+              ipset() { if [ "$1" = restore ]; then cat >/dev/null; fi; return 0; }
+              . "$rootfs/tmp/check-domain-lists.sh"
+              gen_chinadns_lists
+          )
+          target /sbin/uci add_list homeproxy.dns_direct.domain_suffix=child.blocked.example
+          target /sbin/uci add_list homeproxy.dns_proxy.domain_suffix=child.direct.example
+          target /sbin/uci commit homeproxy
+          check_domain_lists
+          python3 - "$rootfs/tmp/run/homeproxy/ci-chinadns" <<'PY'
+          from pathlib import Path
+          import sys
+          root = Path(sys.argv[1])
+          assert (root / 'user_block.txt').read_text() == 'blocked.example\n'
+          assert (root / 'user_direct.txt').read_text() == 'direct.example\n'
+          assert (root / 'user_proxy.txt').read_text() == 'proxy.example\n'
           PY
           # All three empty UI fields must be inert, especially empty block/direct rules.
           for name in dns_block dns_direct dns_proxy; do
               target /sbin/uci set "homeproxy.$name.domain="
+              target /sbin/uci -q delete "homeproxy.$name.domain_suffix" || true
           done
           target /sbin/uci commit homeproxy
+          check_domain_lists
+          cmp "$rootfs/etc/homeproxy/resources/china_list.txt" "$rootfs/tmp/run/homeproxy/china_list.filtered"
+          cmp "$rootfs/etc/homeproxy/resources/gfw_list.txt" "$rootfs/tmp/run/homeproxy/gfw_list.filtered"
           target /usr/bin/ucode -S /etc/homeproxy/scripts/generate_client.uc
           target /usr/bin/sing-box check -c /var/run/homeproxy/sing-box-c.json
           python3 - "$rootfs/tmp/run/homeproxy/sing-box-c.json" <<'PY'
