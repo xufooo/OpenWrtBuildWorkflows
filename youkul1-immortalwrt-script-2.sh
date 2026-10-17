@@ -14,16 +14,19 @@
 set -euo pipefail
 
 echo "=== script-2 ==="
+TASK_ROOT="$(cd -- "$(dirname -- "$0")" && pwd)"
+[ -d package/feeds/luci/luci-app-homeproxy ] || { echo 'Selected HomeProxy package missing' >&2; exit 1; }
+echo "HomeProxy patch target: $(readlink -f package/feeds/luci/luci-app-homeproxy)"
 
 rm -rf feeds/smpackage/miniupnpd-iptables package/feeds/smpackage/miniupnpd-iptables
 
-CONF_PATH="feeds/smpackage/luci-app-homeproxy/root/etc/config/homeproxy"
+CONF_PATH="package/feeds/luci/luci-app-homeproxy/root/etc/config/homeproxy"
 if grep -q 'HP_TEMPLATE' "$CONF_PATH" 2>/dev/null; then
 	echo "Template already present, skip"
 else
 	cat >> "$CONF_PATH" << 'CONFEOF'
 # ============================================================================
-# HomeProxy 最优分流配置模板 v3
+# HP_TEMPLATE: HomeProxy routing defaults
 #
 # 依据：HomeProxy 官方文档 + 8 篇社区实践教程交叉验证
 #   Yuzi / 闲作坊 / 奶油之家 / RULTR / Remyy / DustinWin / SagerNet / MetaCubeX
@@ -55,7 +58,7 @@ else
 # ---------------------------------------------------------------------------
 
 config homeproxy 'config'
-	option main_node 'proxy_out'
+	option main_node 'nil'
 	option main_udp_node 'proxy_out'
 	option routing_mode 'custom'
 	option routing_port 'common'
@@ -65,7 +68,7 @@ config homeproxy 'config'
 
 config homeproxy 'routing'
 	option sniff_override '1'
-	option default_outbound 'proxy_out'
+	option default_outbound 'nil'
 	option default_outbound_dns 'default-dns'
 
 config homeproxy 'dns'
@@ -449,6 +452,14 @@ config routing_rule
 	option action 'route'
 	option outbound 'direct-out'
 
+# Explicit GFW domains precede broad CN IP matches.
+config routing_rule
+	option label 'Proxy GFW Domains'
+	option enabled '1'
+	list rule_set 'gfw'
+	option action 'route'
+	option outbound 'proxy_out'
+
 # 06 国内 IP 直连
 config routing_rule
 	option label '05 Direct CN IP'
@@ -634,13 +645,13 @@ echo "P5a: PEM fetch via ucode (inline)"
 # ------------------------------------------------------------------
 # P5b: Patch node.js — share link import frontend
 # ------------------------------------------------------------------
-NODEJS_PATH="feeds/smpackage/luci-app-homeproxy/htdocs/luci-static/resources/view/homeproxy/node.js"
+NODEJS_PATH="package/feeds/luci/luci-app-homeproxy/htdocs/luci-static/resources/view/homeproxy/node.js"
 
 if [ -f "$NODEJS_PATH" ] && command -v python3 >/dev/null 2>&1; then
 	python3 << 'PYEOF'
 import sys
 
-path = "feeds/smpackage/luci-app-homeproxy/htdocs/luci-static/resources/view/homeproxy/node.js"
+path = "package/feeds/luci/luci-app-homeproxy/htdocs/luci-static/resources/view/homeproxy/node.js"
 with open(path, 'r', encoding='utf-8') as f:
     content = f.read()
 
@@ -704,11 +715,11 @@ fi
 # ------------------------------------------------------------------
 # P5c: Patch update_subscriptions.uc — subscription backend
 # ------------------------------------------------------------------
-SUBS_PATH="feeds/smpackage/luci-app-homeproxy/root/etc/homeproxy/scripts/update_subscriptions.uc"
+SUBS_PATH="package/feeds/luci/luci-app-homeproxy/root/etc/homeproxy/scripts/update_subscriptions.uc"
 
 if [ -f "$SUBS_PATH" ] && command -v python3 >/dev/null 2>&1; then
 	python3 << 'PYEOF'
-path = "feeds/smpackage/luci-app-homeproxy/root/etc/homeproxy/scripts/update_subscriptions.uc"
+path = "package/feeds/luci/luci-app-homeproxy/root/etc/homeproxy/scripts/update_subscriptions.uc"
 with open(path, 'r', encoding='utf-8') as f:
     content = f.read()
 
@@ -793,12 +804,12 @@ echo "=== done ==="
 # ===========================================================================
 # P6: generate_client.uc — robustness and ECH resilience
 # ===========================================================================
-GCU_PATH="feeds/smpackage/luci-app-homeproxy/root/etc/homeproxy/scripts/generate_client.uc"
+GCU_PATH="package/feeds/luci/luci-app-homeproxy/root/etc/homeproxy/scripts/generate_client.uc"
 if [ -f "$GCU_PATH" ] && command -v python3 >/dev/null 2>&1; then
 	python3 << 'PYEOF_P6'
 import pathlib
 
-path = "feeds/smpackage/luci-app-homeproxy/root/etc/homeproxy/scripts/generate_client.uc"
+path = "package/feeds/luci/luci-app-homeproxy/root/etc/homeproxy/scripts/generate_client.uc"
 with open(path, 'r', encoding='utf-8') as f:
     content = f.read()
 
@@ -898,14 +909,14 @@ fi
 # ---------------------------------------------------------------------------
 # P8: init.d/homeproxy — chmod RUN_DIR for ujail
 # ---------------------------------------------------------------------------
-INIT_PATH="feeds/smpackage/luci-app-homeproxy/root/etc/init.d/homeproxy"
+INIT_PATH="package/feeds/luci/luci-app-homeproxy/root/etc/init.d/homeproxy"
 sed -i '/chown -R sing-box:sing-box "\$RUN_DIR"/a\	chmod -R a+r "\$RUN_DIR" 2>/dev/null' "$INIT_PATH" 2>/dev/null
 grep -q 'chmod -R a+r' "$INIT_PATH" && echo "P8 chmod RUN_DIR: OK" || echo "P8 chmod RUN_DIR: SKIP"
 
 # ---------------------------------------------------------------------------
 # P9: luci.homeproxy — pidof for proxy_check
 # ---------------------------------------------------------------------------
-LUCI_PATH="feeds/smpackage/luci-app-homeproxy/root/usr/share/rpcd/ucode/luci.homeproxy"
+LUCI_PATH="package/feeds/luci/luci-app-homeproxy/root/usr/share/rpcd/ucode/luci.homeproxy"
 if [ -f "$LUCI_PATH" ]; then
 	sed -i "s|/usr/bin/wget --spider -qT3 \${url} 2>\"/dev/null\"\`, 3100|pidof sing-box >/dev/null 2>\&1\`|" "$LUCI_PATH" && echo "P9 pidof: OK" || echo "P9 pidof: SKIP"
 else
@@ -968,7 +979,7 @@ fi
 # 参数取自 passwall: -b 127.0.0.1 -c/-t 双上游 -4/-6 IP 段
 #   -m chnlist -M -a -g gfwlist -A gfw 集合 -f (公平模式) -N (IPv6)
 # ===========================================================================
-HPDIR="feeds/smpackage/luci-app-homeproxy"
+HPDIR="package/feeds/luci/luci-app-homeproxy"
 FILES="package/base-files/files"
 CDNG="$FILES/etc/chinadns-ng"
 mkdir -p "$CDNG" "$FILES/etc/config"
@@ -1082,6 +1093,10 @@ gen_chinadns_lists() {
 	_ipset_load chnroute6 "$HP_DIR/resources/china_ip6.txt"
 }
 
+		local ipv6_support dns_port
+		config_get_bool ipv6_support config ipv6_support 0
+		config_get dns_port infra dns_port 5333
+
 		# DNS 分流交给 chinadns-ng (可选), 参数结构同 passwall。
 		if [ "$(uci -q get homeproxy.config.routing_mode)" = "custom" ] &&
 		   [ "$(uci -q get homeproxy.config.dns_routing)" = "chinadns" ]; then
@@ -1091,12 +1106,8 @@ gen_chinadns_lists() {
 			config_get _cdng_trust "config" "dns_trust" "127.0.0.1#$dns_port"
 			config_get _cdng_nipv6 "config" "dns_chinadns_no_ipv6" "tag:gfw"
 			config_get _cdng_cache "config" "dns_chinadns_cache" "4096"
-			# 等 sing-box 的 DNS 就绪再问可信上游, 否则污染结果会被缓存
-			while [ $_i -lt 30 ]; do
-				netstat -tln 2>/dev/null | grep -q ":$dns_port " && break
-				[ $_i -ge 30 ] && break
-				sleep 1; _i=$((_i + 1))
-			done
+			# procd launches both instances after start_service returns.
+			# Waiting for sing-box here would delay every cold start.
 			# 先把三条规则的内容提取成名单文件, 下面的 group 判断才有内容可读
 			gen_chinadns_lists
 
@@ -1159,43 +1170,8 @@ printf '\t\tfi\n\n' >> "$HPINIT.p11tmp"
 sed -n '/# Setup routing table/,$p' "$HPINIT" >> "$HPINIT.p11tmp"
 insert_before "$HPINIT" "# Setup routing table" || exit 1
 
-# 2) firewall_post.ut: 认 chinadns-ng 的 nft 集合, 并挡掉代理侧 QUIC。
-#    Jinja2 的 {% 与 0x.. 标记在 sed/awk 的正则里都要转义, 容易静默失败,
-#    所以整段用 awk 字面匹配 + 逐行 print, 不走正则替换。
-awk '
-/^const routing_mode = uci\.get\(cfgname, .config., .routing_mode.\)/ && !var_done {
-	print
-	print "const chinadns = routing_mode === " SQ "custom" SQ " && (uci.get(cfgname, " SQ "config" SQ ", " SQ "dns_routing" SQ ") || " SQ "native" SQ ") === " SQ "chinadns" SQ ";"
-	var_done = 1
-	next
-}
-{ print }
-BEGIN { SQ = "\047" }
-' "$HPFW" > "$HPFW.p11tmp" && mv "$HPFW.p11tmp" "$HPFW"
-grep -qF "const chinadns = routing_mode === 'custom'" "$HPFW" \
-	|| { echo "P11 firewall: chinadns 变量插入失败" >&2; exit 1; }
-
-for pair in "homeproxy_redirect:homeproxy_redirect_proxy_port" \
-            "homeproxy_mangle_prerouting:homeproxy_mangle_tproxy_port" \
-            "homeproxy_mangle_output:homeproxy_mangle_mark"; do
-	chain="${pair%%:*}"; target="${pair##*:}"
-	grep -qF "chain $chain {" "$HPFW" || { echo "P11 firewall anchor missing: $chain" >&2; exit 1; }
-	# 插入块先落到临时文件, 再由 awk 在锚点后逐行打印, 避开反斜杠续行
-	cat > "$HPFW.p11block" << EOF
-{% if (chinadns): %}
-	meta mark & 0x10000000 != 0 counter return
-	meta mark & 0x20000000 != 0 udp dport 443 counter reject
-	meta mark & 0x20000000 != 0 counter goto $target
-{% endif %}
-EOF
-	awk -v chain="$chain" -v blk="$HPFW.p11block" '
-	BEGIN { while ((getline l < blk) > 0) block = block l "\n" }
-	$0 == "chain " chain " {" { print; printf "%s", block; next }
-	{ print }
-	' "$HPFW" > "$HPFW.p11tmp" && mv "$HPFW.p11tmp" "$HPFW"
-	rm -f "$HPFW.p11block"
-	grep -qF "counter goto $target" "$HPFW" || { echo "P11 firewall: $chain 插入失败" >&2; exit 1; }
-done
+# 2) QUIC rejection is generated alongside proxy routing rules in sing-box.
+# ChinaDNS does not assign packet marks, so no mark-dependent nft rules.
 
 # 3) generate_client.uc: 节点和 ECH 域名不能依赖它们自己的隧道。
 grep -qF '	/* DNS rules */' "$HPGEN" || { echo "P11 generator anchor missing" >&2; exit 1; }
@@ -1281,21 +1257,13 @@ fi
 sed -i "s#^\toption routing_mode 'bypass_mainland_china'\$#\toption routing_mode 'custom'#" "$HPCONF"
 grep -q "option routing_mode 'custom'" "$HPCONF" || { echo "P11 routing_mode anchor missing" >&2; exit 1; }
 
-# dnsmasq 首刷上游直接指向 chinadns-ng, 避免开机这段时间解析不了
-# 首刷直接写好 dnsmasq 上游, 端口与 config 里的一致。
-# 运行期由 init.d/homeproxy 接管, 改端口时两边都会跟着走。
-CDNG_PORT="$(sed -n "s/^\toption dns_chinadns_port '\([^']*\)'.*/\1/p" "$HPCONF")"
-[ -n "$CDNG_PORT" ] || CDNG_PORT=5353
-DHCP="$FILES/etc/config/dhcp"
-if [ -f "$DHCP" ] && ! grep -q "127.0.0.1#$CDNG_PORT" "$DHCP"; then
-	sed -i "\#^config dnsmasq\$#a\\\tlist server '127.0.0.1#$CDNG_PORT'\n\\\toption noresolv '1'\n\\\toption cachesize '0'#" "$DHCP"
-fi
-grep -q "127.0.0.1#$CDNG_PORT" "$DHCP" 2>/dev/null \
-	&& echo "P11 dnsmasq->chinadns: OK (port $CDNG_PORT)" || echo "P11 dnsmasq: CHECK MANUALLY"
+# Keep the normal dnsmasq upstream until a valid proxy is configured.
+# start_service switches to ChinaDNS only after sing-box check succeeds.
 
 	echo "P11 homeproxy patch: OK"
 else
 	echo "P11 homeproxy patch: SKIP (fork missing)"
 fi
 
+python3 "$TASK_ROOT/youkul1-homeproxy-policy.py" "$HPDIR"
 echo "=== P11 done ==="
