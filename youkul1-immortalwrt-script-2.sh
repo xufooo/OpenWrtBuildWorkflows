@@ -1399,9 +1399,10 @@ dnsmasq_state = r'''
 save_chinadns_dnsmasq() (
 \tumask 077
 \tuci -q -c "$HP_DIR" revert dnsmasq_backup
-\tif [ -s "$HP_DIR/dnsmasq_backup" ]; then
-\t\tuci -q -c "$HP_DIR" get dnsmasq_backup.original.section >/dev/null
-\t\treturn $?
+\t# UCI leaves a newline after deleting the final section. File size cannot
+\t# distinguish a valid snapshot from an empty, already-restored package.
+\tif uci -q -c "$HP_DIR" get dnsmasq_backup.original.section >/dev/null; then
+\t\treturn 0
 \tfi
 \tlocal _option _value _server
 \tuci -q -c "$HP_DIR" set dnsmasq_backup.original=options || return 1
