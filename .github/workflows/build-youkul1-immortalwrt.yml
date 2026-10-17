@@ -186,20 +186,30 @@ jobs:
           [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
           echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-      # A package can compile cleanly and still ship nothing: once a Makefile
-      # lost its BuildPackage call the build logged "compile", reported success,
-      # and the rootfs had no LuCI files at all. Check the image itself.
-      - name: Check ChinaDNS LuCI landed in the image
+      # ChinaDNS-NG is managed by HomeProxy; it has no separate LuCI app or
+      # UCI config. Check the core programs and HomeProxy files in the image.
+      - name: Check HomeProxy and ChinaDNS core landed in the image
         run: |
-          img=$(find openwrt/bin/targets -name '*squashfs-sysupgrade.bin' | head -1)
-          off=$(python3 -c "
-          b=open('$img','rb').read()
-          print(b.find(b'hsqs'))")
-          unsquashfs -l -o "$off" "$img" | grep -q 'usr/lib/lua/luci/model/cbi/chinadns-ng.lua' \
-            || { echo 'ChinaDNS LuCI missing from firmware'; exit 1; }
-          unsquashfs -l -o "$off" "$img" | grep -q 'etc/config/chinadns-ng' \
-            || { echo 'chinadns-ng UCI config missing from firmware'; exit 1; }
-          echo 'ChinaDNS LuCI present'
+          img=$(find openwrt/bin/targets -name '*youku_yk-l1-squashfs-sysupgrade.bin' -print -quit)
+          [ -n "$img" ] || { echo 'YK-L1 sysupgrade image missing'; exit 1; }
+          off=$(python3 - "$img" <<'PY'
+          import sys
+          from pathlib import Path
+          data = Path(sys.argv[1]).read_bytes()
+          offset = data.find(b'hsqs')
+          if offset < 0:
+              raise SystemExit('SquashFS filesystem missing from firmware')
+          print(offset)
+          PY
+          )
+          listing=$(mktemp)
+          trap 'rm -f "$listing"' EXIT
+          unsquashfs -l -o "$off" "$img" > "$listing"
+          for file in usr/bin/chinadns-ng usr/bin/sing-box usr/sbin/ipset etc/init.d/homeproxy etc/config/homeproxy; do
+            grep -Fqx "squashfs-root/$file" "$listing" \
+              || { echo "Required firmware file missing: $file"; exit 1; }
+          done
+          echo 'HomeProxy and ChinaDNS core present (standalone ChinaDNS LuCI is not required)'
 
       - name: Check space usage
         if: (!cancelled())
