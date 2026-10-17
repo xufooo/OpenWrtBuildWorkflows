@@ -973,67 +973,20 @@ FILES="package/base-files/files"
 CDNG="$FILES/etc/chinadns-ng"
 mkdir -p "$CDNG" "$FILES/etc/config"
 
-# --- 名单: 源与 passwall 一致 (rule_update.lua) --------------------------
-#   gfwlist  Loyalsoldier/v2ray-rules-dat/gfw.txt
-#   chnroute ispip.clang.cn/all_cn.txt  + all_cn_ipv6.txt
-#   chnlist  felixonmars/dnsmasq-china-list 三个 .conf, 抽 server=/域/ 部分
-#   精确分流仍归 HomeProxy 的 custom 规则; 自动名单判错的写进 direct_list.txt。
-cat > "$CDNG/direct_list.txt" << 'EOF'
-# 自动名单会判成境外、但本机需要直连的域名 (同 passwall 的 direct_host)
-# 对应 HomeProxy 规则 07 Direct Microsoft CN
-microsoft.com
-apple.com
-EOF
-
-: > "$CDNG/block-list.txt"
-
-fetch() {
-	local url="$1" dst="$2"
-	curl -fsSL -m 300 "$url" -o "$dst" 2>/dev/null && [ -s "$dst" ]
-}
-
-# chnlist: 三个 dnsmasq conf 里抽出 server=/domain/ 的域名
-build_chinalist() {
-	local acc="$CDNG/chinalist.txt.raw"
-	: > "$acc"
-	for f in accelerated-domains.china.conf apple.china.conf google.china.conf; do
-		fetch "https://fastly.jsdelivr.net/gh/felixonmars/dnsmasq-china-list/$f" "$CDNG/$f" || continue
-		# server=/domain/... -> domain
-		sed -n "s#^[ \t]*server=/\([^/]*\)/.*#\1#p" "$CDNG/$f" >> "$acc"
-	rm -f "$CDNG/$f"
-	done
-	[ -s "$acc" ] || return 1
-	sort -u "$acc" > "$CDNG/chinalist.txt"
-	rm -f "$acc"
-	[ "$(wc -l < "$CDNG/chinalist.txt")" -ge 100 ]
-}
-
-if build_chinalist; then
-	echo "P11 chinalist: OK ($(wc -l < "$CDNG/chinalist.txt") 行)"
-else
-	echo "P11 chinalist: FETCH FAILED"
-fi
-
-if fetch "https://fastly.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/gfw.txt" "$CDNG/gfwlist.txt" \
-   && [ "$(wc -l < "$CDNG/gfwlist.txt")" -ge 100 ]; then
-	echo "P11 gfwlist: OK ($(wc -l < "$CDNG/gfwlist.txt") 行)"
-else
-	echo "P11 gfwlist: FETCH FAILED"
-fi
-
-if fetch "https://ispip.clang.cn/all_cn.txt" "$CDNG/chnroute.txt" \
-   && [ "$(wc -l < "$CDNG/chnroute.txt")" -ge 100 ]; then
-	echo "P11 chnroute: OK ($(wc -l < "$CDNG/chnroute.txt") 行)"
-else
-	echo "P11 chnroute: FETCH FAILED"
-fi
-
-if fetch "https://ispip.clang.cn/all_cn_ipv6.txt" "$CDNG/chnroute6.txt" \
-   && [ "$(wc -l < "$CDNG/chnroute6.txt")" -ge 10 ]; then
-	echo "P11 chnroute6: OK ($(wc -l < "$CDNG/chnroute6.txt") 行)"
-else
-	echo "P11 chnroute6: FETCH FAILED"
-fi
+# --- 名单: 默认表用 HomeProxy 的, 用户规则另行补充 ----------------------
+#
+# 默认规则 (上游维护, 我们只读不写, 用户升级/更新后自动跟着变):
+#   $HP_DIR/resources/china_list.txt   国内域名, 11 万条 -> china_dns
+#   $HP_DIR/resources/gfw_list.txt     被墙域名, 4 千条 -> trust_dns
+#   $HP_DIR/resources/china_ip4/6.txt  中国 IP 段, 污染过滤与 IPv6 判定依据
+#
+# 用户规则 (在 HomeProxy 界面写三条: 直连/代理/屏蔽, 少量):
+#   /etc/chinadns-ng/user_direct.txt   直连域名 -> china_dns
+#   /etc/chinadns-ng/user_proxy.txt    代理域名 -> trust_dns
+#   /etc/chinadns-ng/user_block.txt    屏蔽域名 -> 不解析
+#   由 gen_chinadns_lists 从 routing_rule 生成, 改规则重启即生效。
+#   这三份只是补充: 用户删掉规则 -> 文件为空 -> chinadns 退回纯默认名单, 不影响分流。
+# direct/proxy/block 三个文件在 init 里按需创建 (运行时路径, 不在编译期写)。
 
 # --- patch HomeProxy: 开关 + 让出上游 + 认 mark + 节点自举 ----------------
 # 用 sed/awk 改, 与本脚本其余部分 (P5/P6/P9) 保持一致。
@@ -1041,6 +994,8 @@ HPCONF="$HPDIR/root/etc/config/homeproxy"
 HPINIT="$HPDIR/root/etc/init.d/homeproxy"
 HPFW="$HPDIR/root/etc/homeproxy/scripts/firewall_post.ut"
 HPGEN="$HPDIR/root/etc/homeproxy/scripts/generate_client.uc"
+
+
 HPJS="$HPDIR/htdocs/luci-static/resources/view/homeproxy/client.js"
 
 # 在锚点前插入, 锚点不存在则报错退出, 避免静默失效
@@ -1056,38 +1011,148 @@ if [ -d "$HPDIR" ]; then
 # 1) init.d/homeproxy: dns_routing=chinadns 时让 homeproxy 交出 dnsmasq 上游,
 #    自己拉起 chinadns-ng。参数结构照抄 passwall 的 run_chinadns_ng。
 
+# direct_list / block_list 从 routing_rule 推导:
+#   标签含 Direct 且出口是直连的规则 -> 直连域名
+#   action=reject 的规则             -> 阻断域名
+# 不写死任何域名, 用户改规则后重启 homeproxy 就会重新生成。
 sed -n '1,/# DNSMasq rules/p' "$HPINIT" | sed '$d' > "$HPINIT.p11tmp"
 cat >> "$HPINIT.p11tmp" << 'CDNG_BLOCK'
+
+gen_chinadns_lists() {
+	local _dir=/etc/chinadns-ng
+	local _direct="$_dir/user_direct.txt"
+	local _proxy="$_dir/user_proxy.txt"
+	local _block="$_dir/user_block.txt"
+	local _rule _act _out _dom _d
+
+	# HomeProxy 的三条固定规则 (DNS 分流-直连/代理/屏蔽) 就是 chinadns 的用户名单。
+	# 三条规则常驻、不可删除, 只能清空内容; 清空后退回默认名单, 分流不受影响。
+	# 用户填的域名第一顺位: 先于 china_list / gfw_list 生效, 同名时以用户为准。
+	for _f in "$_direct" "$_proxy" "$_block"; do
+		mkdir -p "$_dir"
+		: > "$_f"
+	done
+
+	# routing_rule 既有匿名 section (@routing_rule[N]) 也有命名 section (dns_*), 都要遍历。
+	for _rule in $(uci -q show homeproxy \
+			| grep -E '^(homeproxy\.(@routing_rule\[[0-9]+\]|dns_[a-z]+)\.label=)' \
+			| grep -oE '@routing_rule\[[0-9]+\]|dns_[a-z]+'); do
+		[ "$(uci -q get homeproxy.$_rule.enabled)" = "1" ] || continue
+		_act=$(uci -q get homeproxy.$_rule.action)
+		_out=$(uci -q get homeproxy.$_rule.outbound)
+		_dom=$(uci -q get homeproxy.$_rule.domain)
+		[ -n "$_dom" ] || continue
+
+		case "$_act" in
+			reject) _target="$_block" ;;
+			route)
+				case "$_out" in
+					proxy_out|routing_node) _target="$_proxy" ;;
+					direct-out)              _target="$_direct" ;;
+					*) continue ;;
+				esac
+				;;
+			*) continue ;;
+		esac
+
+		# domain 字段是空格分隔的多个域名
+		for _d in $_dom; do
+			echo "$_d" >> "$_target"
+		done
+	done
+
+	for _f in "$_direct" "$_proxy" "$_block"; do
+		sort -u "$_f" 2>/dev/null | grep . > "$_f.tmp" && mv "$_f.tmp" "$_f" || : > "$_f"
+	done
+	echo "  | - chinadns 名单: 直连 $(wc -l < "$_direct") 条, 代理 $(wc -l < "$_proxy") 条, 屏蔽 $(wc -l < "$_block") 条"
+
+	# chinadns-ng 的 -4/-6 要的是 ipset 名 (默认 chnroute/chnroute6), 不是文件路径。
+	# 中国 IP 段得先灌进这两个集合, 否则它判断不出"结果是不是国内地址", 污染过滤失效。
+	_ipset_load() {
+		local _set="$1" _src="$2" _fam="inet"
+		[ "$_set" = "chnroute6" ] && _fam="inet6"
+		[ -s "$_src" ] || return 0
+		ipset destroy "$_set" 2>/dev/null
+		ipset create "$_set" hash:net family "$_fam" 2>/dev/null || return 1
+		awk -v s="$_set" '{print "add " s " " $0}' "$_src" | ipset restore -exist 2>/dev/null
+		# ipset v7 的条目数在 Header 行, 不是逐行列表
+		echo "  | - ipset $_set: $(ipset list "$_set" 2>/dev/null | sed -n 's/^Number of entries: //p') 条"
+	}
+	_ipset_load chnroute "$HP_DIR/resources/china_ip4.txt"
+	_ipset_load chnroute6 "$HP_DIR/resources/china_ip6.txt"
+}
+
 		# DNS 分流交给 chinadns-ng (可选), 参数结构同 passwall。
-		if [ "$(uci -q get homeproxy.config.dns_routing)" = "chinadns" ]; then
-			local _cdng_port=5353 _cdng_china _cdng_trust _i=0
-			config_get _cdng_china "config" "dns_china" "119.29.29.29"
+		if [ "$(uci -q get homeproxy.config.routing_mode)" = "custom" ] &&
+		   [ "$(uci -q get homeproxy.config.dns_routing)" = "chinadns" ]; then
+			local _cdng_port _cdng_china _cdng_trust _cdng_nipv6 _cdng_cache _i=0
+			config_get _cdng_port "config" "dns_chinadns_port" "5353"
+			config_get _cdng_china "config" "dns_china" ""
 			config_get _cdng_trust "config" "dns_trust" "127.0.0.1#$dns_port"
+			config_get _cdng_nipv6 "config" "dns_chinadns_no_ipv6" "tag:gfw"
+			config_get _cdng_cache "config" "dns_chinadns_cache" "4096"
 			# 等 sing-box 的 DNS 就绪再问可信上游, 否则污染结果会被缓存
 			while [ $_i -lt 30 ]; do
 				netstat -tln 2>/dev/null | grep -q ":$dns_port " && break
+				[ $_i -ge 30 ] && break
 				sleep 1; _i=$((_i + 1))
 			done
+			# 先把三条规则的内容提取成名单文件, 下面的 group 判断才有内容可读
+			gen_chinadns_lists
+
 			procd_open_instance chinadns-ng
-			procd_set_param command /usr/bin/chinadns-ng -v -b 127.0.0.1 -l $_cdng_port \
-				-c "$_cdng_china" -t "$_cdng_trust" \
-				-4 /etc/chinadns-ng/chnroute -6 /etc/chinadns-ng/chnroute6 \
-				-m /etc/chinadns-ng/chinalist.txt -M -a \
-				-g /etc/chinadns-ng/gfwlist.txt \
-				-f -N tag:gfw --cache 4096 --cache-db /var/run/chinadns-ng.cache
+			local _cdng_args="-v -b 127.0.0.1 -l $_cdng_port"
+			[ -n "$_cdng_china" ] && _cdng_args="$_cdng_args -c $_cdng_china"
+			_cdng_args="$_cdng_args -t $_cdng_trust"
+			# 用户在 HomeProxy 里写的三条规则 (直连/代理/屏蔽) 直接成为 chinadns 的分组,
+			# 名单由 gen_chinadns_lists 从 routing_rule 生成。路径必须与生成时一致。
+			# 注意: 每个 group 都必须给 group-upstream, 否则 chinadns-ng 报
+			# "upstream_group is empty" 直接退出。屏蔽组解析后由 sing-box 的 reject 规则拦下。
+			[ -s "/etc/chinadns-ng/user_block.txt" ] && {
+				_cdng_args="$_cdng_args --group blockg"
+				_cdng_args="$_cdng_args --group-dnl /etc/chinadns-ng/user_block.txt"
+				_cdng_args="$_cdng_args --group-upstream $_cdng_trust"
+			}
+			[ -s "/etc/chinadns-ng/user_direct.txt" ] && {
+				_cdng_args="$_cdng_args --group directg"
+				_cdng_args="$_cdng_args --group-dnl /etc/chinadns-ng/user_direct.txt"
+				_cdng_args="$_cdng_args --group-upstream $_cdng_china"
+			}
+			[ -s "/etc/chinadns-ng/user_proxy.txt" ] && {
+				_cdng_args="$_cdng_args --group proxylist"
+				_cdng_args="$_cdng_args --group-dnl /etc/chinadns-ng/user_proxy.txt"
+				_cdng_args="$_cdng_args --group-upstream $_cdng_trust"
+			}
+			# 默认大表用 HomeProxy 自带的资源 (上游维护, 我们只读不写)
+			# 注意: -4/-6 是 ipset/nftset 的名字, 不是文件路径; 中国 IP 段由 ipset 提供,
+			#       这里用默认的 chnroute/chnroute6 集合。
+			[ -f "$HP_DIR/resources/china_list.txt" ] && _cdng_args="$_cdng_args -m $HP_DIR/resources/china_list.txt -M -a"
+			[ -f "$HP_DIR/resources/gfw_list.txt" ] && _cdng_args="$_cdng_args -g $HP_DIR/resources/gfw_list.txt"
+			[ -n "$_cdng_nipv6" ] && _cdng_args="$_cdng_args -N $_cdng_nipv6"
+			[ "$_cdng_cache" != "0" ] && _cdng_args="$_cdng_args --cache $_cdng_cache --cache-db /var/run/chinadns-ng.cache"
+			# shellcheck disable=SC2086
+			# 逐个 append, 不用 set_param + 未加引号的变量展开 (参数里有 -m/-g 这类
+			# 独立开关, set_param 会在某些 procd 版本上被拆错导致启动失败)。
+			procd_set_param command /usr/bin/chinadns-ng
+			# shellcheck disable=SC2086
+			procd_append_param command $_cdng_args -f
 			procd_set_param respawn
 			procd_close_instance
 			rm -rf "$DNSMASQ_DIR/../dnsmasq-homeproxy.conf" "$DNSMASQ_DIR"
 			for server in $(uci -q get dhcp.@dnsmasq[0].server); do
 				case "$server" in /*) ;; *) uci -q del_list "dhcp.@dnsmasq[0].server=$server" ;; esac
 			done
-			uci -q add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'
+			uci -q add_list "dhcp.@dnsmasq[0].server=127.0.0.1#$_cdng_port"
 			uci -q set dhcp.@dnsmasq[0].noresolv='1'
 			uci -q set dhcp.@dnsmasq[0].cachesize='0'
 			uci -q commit dhcp
 			/etc/init.d/dnsmasq restart >/dev/null 2>&1
 		else
+
+
 CDNG_BLOCK
+
+
 # 原块尾部的 fi 要在 else 之后闭合
 sed -n '/# DNSMasq rules/,/# Setup routing table/p' "$HPINIT" | sed '1d;$d' >> "$HPINIT.p11tmp"
 printf '\t\tfi\n\n' >> "$HPINIT.p11tmp"
@@ -1149,7 +1214,8 @@ awk '
 	print "				push(bootstrap, node.tls_sni);"
 	print "		});"
 	print "\t\tif (length(bootstrap))"
-	print "\t\t\tpush(config.dns.rules, {domain: uniq(bootstrap), action: \x27route\x27, server: \x27cfg-bootstrap_dns-dns\x27});"
+	print "		/* default-dns 是硬编码 IP + direct-out 的上游, 不依赖任何节点, 用它做 bootstrap。*/"
+	print "			push(config.dns.rules, {domain: uniq(bootstrap), action: \x27route\x27, server: \x27default-dns\x27});"
 	print "\t}"
 	done = 1
 }
@@ -1164,7 +1230,7 @@ awk '
 	print "\t\to = s.taboption(\x27routing\x27, form.ListValue, \x27dns_routing\x27, _(\x27DNS routing\x27));"
 	print "\t\to.value(\x27native\x27, _(\x27HomeProxy built-in\x27));"
 	print "\t\to.value(\x27chinadns\x27, _(\x27chinadns-ng (anti-pollution)\x27));"
-	print "\t\to.default = \x27native\x27;"
+	print "\t\to.default = \x27chinadns\x27;"
 	print "\t\to.depends(\x27routing_mode\x27, \x27custom\x27);"
 	print ""
 	done = 1
@@ -1173,8 +1239,59 @@ awk '
 ' "$HPJS" > "$HPJS.p11tmp" && mv "$HPJS.p11tmp" "$HPJS"
 
 # 5) config: 默认 native, 上游行为完全不变。
-sed -i "s#^config homeproxy 'config'\$#config homeproxy 'config'\n\toption dns_routing 'native'\n\toption dns_china '119.29.29.29'#" "$HPCONF"
-grep -q "option dns_routing 'native'" "$HPCONF" || { echo "P11 config anchor missing" >&2; exit 1; }
+# 默认走 chinadns-ng: 本机的特色, 首次刷机即生效, 用户可在界面改回 native。
+sed -i "s#^config homeproxy 'config'\$#config homeproxy 'config'\n\toption dns_routing 'chinadns'\n\toption dns_china '119.29.29.29'\n\toption dns_chinadns_port '5353'\n\toption dns_chinadns_no_ipv6 'tag:gfw'\n\toption dns_chinadns_cache '4096'#" "$HPCONF"
+for _opt in dns_routing dns_china dns_chinadns_port dns_chinadns_no_ipv6 dns_chinadns_cache; do
+	grep -qE "^[[:space:]]*option $_opt " "$HPCONF" || { echo "P11 config missing: $_opt" >&2; exit 1; }
+done
+
+# HomeProxy 规则表里的三条固定规则, chinadns-ng 的用户名单从它们生成。
+# 规则表只在 custom 模式下出现和生效, 所以无需额外判断模式。
+# 域名可以清空 (清空即退回默认名单), 但规则本身常驻, 删掉会自动补回。
+if ! grep -q "DNS 分流-直连" "$HPCONF"; then
+	cat >> "$HPCONF" << 'FIXED_RULES'
+config routing_rule 'dns_direct'
+	option label 'DNS 分流-直连'
+	option enabled '1'
+	option action 'route'
+	option outbound 'direct-out'
+	option domain ''
+
+config routing_rule 'dns_proxy'
+	option label 'DNS 分流-代理'
+	option enabled '1'
+	option action 'route'
+	option outbound 'proxy_out'
+	option domain ''
+
+config routing_rule 'dns_block'
+	option label 'DNS 分流-屏蔽'
+	option enabled '1'
+	option action 'reject'
+	option domain ''
+FIXED_RULES
+	echo "P11 fixed dns rules: OK"
+else
+	echo "P11 fixed dns rules: present"
+fi
+
+
+
+# routing_mode 必须是 custom: chinadns 只在该模式下生效
+sed -i "s#^\toption routing_mode 'bypass_mainland_china'\$#\toption routing_mode 'custom'#" "$HPCONF"
+grep -q "option routing_mode 'custom'" "$HPCONF" || { echo "P11 routing_mode anchor missing" >&2; exit 1; }
+
+# dnsmasq 首刷上游直接指向 chinadns-ng, 避免开机这段时间解析不了
+# 首刷直接写好 dnsmasq 上游, 端口与 config 里的一致。
+# 运行期由 init.d/homeproxy 接管, 改端口时两边都会跟着走。
+CDNG_PORT="$(sed -n "s/^\toption dns_chinadns_port '\([^']*\)'.*/\1/p" "$HPCONF")"
+[ -n "$CDNG_PORT" ] || CDNG_PORT=5353
+DHCP="$FILES/etc/config/dhcp"
+if [ -f "$DHCP" ] && ! grep -q "127.0.0.1#$CDNG_PORT" "$DHCP"; then
+	sed -i "\#^config dnsmasq\$#a\\\tlist server '127.0.0.1#$CDNG_PORT'\n\\\toption noresolv '1'\n\\\toption cachesize '0'#" "$DHCP"
+fi
+grep -q "127.0.0.1#$CDNG_PORT" "$DHCP" 2>/dev/null \
+	&& echo "P11 dnsmasq->chinadns: OK (port $CDNG_PORT)" || echo "P11 dnsmasq: CHECK MANUALLY"
 
 	echo "P11 homeproxy patch: OK"
 else
