@@ -913,16 +913,8 @@ INIT_PATH="package/feeds/luci/luci-app-homeproxy/root/etc/init.d/homeproxy"
 sed -i '/chown -R sing-box:sing-box "\$RUN_DIR"/a\	chmod -R a+r "\$RUN_DIR" 2>/dev/null' "$INIT_PATH" 2>/dev/null
 grep -q 'chmod -R a+r' "$INIT_PATH" && echo "P8 chmod RUN_DIR: OK" || echo "P8 chmod RUN_DIR: SKIP"
 
-# ---------------------------------------------------------------------------
-# P9: luci.homeproxy — pidof for proxy_check
-# ---------------------------------------------------------------------------
-LUCI_PATH="package/feeds/luci/luci-app-homeproxy/root/usr/share/rpcd/ucode/luci.homeproxy"
-if [ -f "$LUCI_PATH" ]; then
-	sed -i "s|/usr/bin/wget --spider -qT3 \${url} 2>\"/dev/null\"\`, 3100|pidof sing-box >/dev/null 2>\&1\`|" "$LUCI_PATH" && echo "P9 pidof: OK" || echo "P9 pidof: SKIP"
-else
-	echo "P9 luci.homeproxy: SKIP"
-fi
-
+# Preserve the upstream connection_check: a running process does not prove
+# that the configured proxy can reach the requested site.
 
 # ---------------------------------------------------------------------------
 # P10: BBR + fq — BBR requires the fq qdisc to fully engage
