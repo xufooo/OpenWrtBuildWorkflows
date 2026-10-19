@@ -1019,7 +1019,7 @@ gen_chinadns_lists() {
 	local _block="$_dir/user_block.txt"
 	local _rule _act _out _dom _d
 
-	# HomeProxy 的三条固定规则 (DNS 分流-直连/代理/屏蔽) 就是 chinadns 的用户名单。
+	# HomeProxy 的三条固定规则 (直连/代理/屏蔽列表) 就是 chinadns 的用户名单。
 	# 三条规则常驻、不可删除, 只能清空内容; 清空后退回默认名单, 分流不受影响。
 	# 用户填的域名第一顺位: 先于 china_list / gfw_list 生效, 同名时以用户为准。
 	for _f in "$_direct" "$_proxy" "$_block"; do
@@ -1029,7 +1029,7 @@ gen_chinadns_lists() {
 
 	# Only the three unconditional DNS lists can classify DNS queries.
 	# Ordinary routing rules may have source/port predicates DNS cannot honor.
-	for _rule in dns_block dns_direct dns_proxy; do
+	for _rule in block_list direct_list proxy_list; do
 		[ "$(uci -q get homeproxy.$_rule.enabled)" = "1" ] || continue
 		_act=$(uci -q get homeproxy.$_rule.action)
 		_out=$(uci -q get homeproxy.$_rule.outbound)
@@ -1207,24 +1207,24 @@ done
 # HomeProxy 规则表里的三条固定规则, chinadns-ng 的用户名单从它们生成。
 # 规则表只在 custom 模式下出现和生效, 所以无需额外判断模式。
 # 域名可以清空 (清空即退回默认名单), 但规则本身常驻, 删掉会自动补回。
-if ! grep -q "DNS 分流-直连" "$HPCONF"; then
+if ! grep -q "label '直连列表" "$HPCONF"; then
 	cat >> "$HPCONF" << 'FIXED_RULES'
-config routing_rule 'dns_direct'
-	option label 'DNS 分流-直连'
+config routing_rule 'direct_list'
+	option label '直连列表 (Direct List)'
 	option enabled '1'
 	option action 'route'
 	option outbound 'direct-out'
 	option domain ''
 
-config routing_rule 'dns_proxy'
-	option label 'DNS 分流-代理'
+config routing_rule 'proxy_list'
+	option label '代理列表 (Proxy List)'
 	option enabled '1'
 	option action 'route'
 	option outbound 'proxy_out'
 	option domain ''
 
-config routing_rule 'dns_block'
-	option label 'DNS 分流-屏蔽'
+config routing_rule 'block_list'
+	option label '屏蔽列表 (Block List)'
 	option enabled '1'
 	option action 'reject'
 	option domain ''
@@ -1282,7 +1282,7 @@ block = block[:-len('\t\t});\n')] + '''\t\t};
 '''
 helpers = '''
 \tconst chinadns_policy = uci.get(uciconfig, ucimain, 'dns_routing') === 'chinadns';
-\tconst user_rules = ['dns_block', 'dns_direct', 'dns_proxy'];
+\tconst user_rules = ['block_list', 'direct_list', 'proxy_list'];
 \tfunction append_policy_rule(rule) {
 \t\t// Preserve the original match predicates. Reject only UDP/443 that
 \t\t// would take this proxy route; earlier direct/reject rules still win.
