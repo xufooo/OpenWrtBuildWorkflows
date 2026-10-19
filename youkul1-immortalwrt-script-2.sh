@@ -1334,8 +1334,6 @@ ordered = '''
 \t\tif (!(cfg['.name'] in user_rules))
 \t\t\tadd_routing_rule(cfg);
 \t});
-\tif (chinadns_policy && get_outbound(default_outbound) !== 'direct-out')
-\t\tpush(config.route.rules, {network: 'udp', port: [443], action: 'reject', method: 'default'});
 '''
 text = text[:start] + helpers + block + ordered + text[end:]
 generator.write_text(text)
