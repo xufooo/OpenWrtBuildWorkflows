@@ -1100,7 +1100,8 @@ gen_chinadns_lists() {
 			gen_chinadns_lists
 
 			procd_open_instance chinadns-ng
-			local _cdng_args="-v -b 127.0.0.1 -l $_cdng_port"
+			# No -v: verbose fills the log with one line per query.
+			local _cdng_args="-b 127.0.0.1 -l $_cdng_port"
 			[ -n "$_cdng_china" ] && _cdng_args="$_cdng_args -c $_cdng_china"
 			_cdng_args="$_cdng_args -t $_cdng_trust"
 			# 用户在 HomeProxy 里写的三条规则 (直连/代理/屏蔽) 直接成为 chinadns 的分组,
