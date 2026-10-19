@@ -1094,6 +1094,14 @@ gen_chinadns_lists() {
 			config_get _cdng_trust "config" "dns_trust" "127.0.0.1#$dns_port"
 			config_get _cdng_nipv6 "config" "dns_chinadns_no_ipv6" "tag:gfw"
 			config_get _cdng_cache "config" "dns_chinadns_cache" "4096"
+			# HomeProxy's own DNS hijack would redirect clients straight to
+			# sing-box:5333 and bypass dnsmasq and ChinaDNS-NG entirely, so the
+			# two options cannot both be on. ChinaDNS mode owns the client
+			# path; native mode leaves the setting to the user.
+			if [ "$(uci -q get homeproxy.infra.dns_redirect)" = "1" ]; then
+				echo "  | - dns_redirect 关闭: 避免绕过 dnsmasq 与 chinadns-ng"
+				uci -q set homeproxy.infra.dns_redirect="0"
+			fi
 			# procd launches both instances after start_service returns.
 			# Waiting for sing-box here would delay every cold start.
 			# 先把三条规则的内容提取成名单文件, 下面的 group 判断才有内容可读
