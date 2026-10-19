@@ -1055,7 +1055,10 @@ gen_chinadns_lists() {
 	done
 
 	for _f in "$_direct" "$_proxy" "$_block"; do
-		sort -u "$_f" 2>/dev/null | grep . > "$_f.tmp" && mv "$_f.tmp" "$_f" || : > "$_f"
+		# mv must not depend on grep: an empty list makes grep exit 1, which
+		# skipped the mv and left a stray .tmp behind.
+		sort -u "$_f" 2>/dev/null | grep . > "$_f.tmp"
+		mv -f "$_f.tmp" "$_f"
 	done
 	echo "  | - chinadns 名单: 直连 $(wc -l < "$_direct") 条, 代理 $(wc -l < "$_proxy") 条, 屏蔽 $(wc -l < "$_block") 条"
 
@@ -1084,7 +1087,10 @@ gen_chinadns_lists() {
 		   [ "$(uci -q get homeproxy.config.dns_routing)" = "chinadns" ]; then
 			local _cdng_port _cdng_china _cdng_trust _cdng_nipv6 _cdng_cache _i=0
 			config_get _cdng_port "config" "dns_chinadns_port" "5353"
-			config_get _cdng_china "config" "dns_china" ""
+			# Share HomeProxy's China DNS setting instead of a second one. The LuCI
+			# field already covers UDP/TCP/DoH/DoQ/DoT, and sing-box resolves
+			# china_list domains with it, so both halves must read the same value.
+			config_get _cdng_china "config" "china_dns_server" ""
 			config_get _cdng_trust "config" "dns_trust" "127.0.0.1#$dns_port"
 			config_get _cdng_nipv6 "config" "dns_chinadns_no_ipv6" "tag:gfw"
 			config_get _cdng_cache "config" "dns_chinadns_cache" "4096"
@@ -1199,8 +1205,8 @@ awk '
 
 # 5) config: 默认 native, 上游行为完全不变。
 # 默认走 chinadns-ng: 本机的特色, 首次刷机即生效, 用户可在界面改回 native。
-sed -i "s#^config homeproxy 'config'\$#config homeproxy 'config'\n\toption dns_routing 'chinadns'\n\toption dns_china '119.29.29.29'\n\toption dns_chinadns_port '5353'\n\toption dns_chinadns_no_ipv6 'tag:gfw'\n\toption dns_chinadns_cache '4096'#" "$HPCONF"
-for _opt in dns_routing dns_china dns_chinadns_port dns_chinadns_no_ipv6 dns_chinadns_cache; do
+sed -i "s#^config homeproxy 'config'\$#config homeproxy 'config'\n\toption dns_routing 'chinadns'\n\toption dns_chinadns_port '5353'\n\toption dns_chinadns_no_ipv6 'tag:gfw'\n\toption dns_chinadns_cache '4096'#" "$HPCONF"
+for _opt in dns_routing dns_chinadns_port dns_chinadns_no_ipv6 dns_chinadns_cache; do
 	grep -qE "^[[:space:]]*option $_opt " "$HPCONF" || { echo "P11 config missing: $_opt" >&2; exit 1; }
 done
 
