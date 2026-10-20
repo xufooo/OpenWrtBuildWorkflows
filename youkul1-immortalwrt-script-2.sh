@@ -64,6 +64,11 @@ config homeproxy 'config'
 	option proxy_mode 'redirect_tproxy'
 	option ipv6_support '1'
 	option log_level 'warn'
+	# DNS 上游。china_dns_server 是国内域名的解析器, 界面上的 "China DNS server"
+	# 就是它, chinadns-ng 也读这个值; 缺了它, chinadns-ng 会退回默认上游,
+	# 国内域名查询绕到境外。
+	option dns_server '8.8.8.8'
+	option china_dns_server '223.5.5.5'
 
 config homeproxy 'routing'
 	option sniff_override '1'
@@ -1208,6 +1213,13 @@ awk '
 # 默认走 chinadns-ng: 本机的特色, 首次刷机即生效, 用户可在界面改回 native。
 sed -i "s#^config homeproxy 'config'\$#config homeproxy 'config'\n\toption dns_routing 'chinadns'\n\toption dns_chinadns_port '5353'\n\toption dns_chinadns_no_ipv6 'tag:gfw'\n\toption dns_chinadns_cache '4096'#" "$HPCONF"
 for _opt in dns_routing dns_chinadns_port dns_chinadns_no_ipv6 dns_chinadns_cache; do
+	grep -qE "^[[:space:]]*option $_opt " "$HPCONF" || { echo "P11 config missing: $_opt" >&2; exit 1; }
+done
+
+# The template above replaces the upstream config section, so the DNS upstream
+# fields have to be present or chinadns-ng gets no -c and falls back to its
+# default upstream for domestic names.
+for _opt in dns_server china_dns_server; do
 	grep -qE "^[[:space:]]*option $_opt " "$HPCONF" || { echo "P11 config missing: $_opt" >&2; exit 1; }
 done
 
