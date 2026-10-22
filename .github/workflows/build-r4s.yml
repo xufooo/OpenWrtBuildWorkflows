@@ -3,7 +3,7 @@ name: Build R4S OpenWrt
 on:
   workflow_dispatch:
   push:
-    branches: [codex/r4s-build]
+    branches: [r4s-build]
     paths:
       - '.github/workflows/build-r4s.yml'
       - 'r4s/**'

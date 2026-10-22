@@ -17,7 +17,7 @@ PassWall's feeds, sbwml's MosDNS/LuCI feed, Lucky's official feed and Argon.
 Lucky's upstream recipe uses its author's official release binary. MosDNS
 uses its feed's normal public patch set, not a private firmware binary.
 
-The first push to codex/r4s-build starts GitHub Actions. Later runs may be
+Pushes to r4s-build start GitHub Actions. Later runs may be
 started manually. Builds do not cancel other running builds.
 
 Artifacts include firmware, checksums, package manifest, full build config,
