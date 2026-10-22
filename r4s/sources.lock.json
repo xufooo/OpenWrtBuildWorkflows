@@ -1,0 +1,30 @@
+{
+  "openwrt": {
+    "url": "https://github.com/openwrt/openwrt.git",
+    "commit": "64900e756efa667774214f9c6b17c113222e01f7",
+    "version": "25.12.6"
+  },
+  "extras": {
+    "passwall": {
+      "url": "https://github.com/Openwrt-Passwall/openwrt-passwall.git",
+      "commit": "5e2bbfa8e6a32f7e54a7fe29891a28fb05439e52"
+    },
+    "passwall_packages": {
+      "url": "https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git",
+      "commit": "049aaf472e8ce7e423299d43a516b7092a25b381"
+    },
+    "mosdns": {
+      "url": "https://github.com/sbwml/luci-app-mosdns.git",
+      "commit": "bd40245303cd0ba56804d49eed5dbc4be2a082ca"
+    },
+    "lucky": {
+      "url": "https://github.com/gdy666/luci-app-lucky.git",
+      "commit": "69305fef127259892ba4603e98f730f0330e5caa",
+      "arm64_sha256": "eb3a095238595193dab1fb486eed2a19d46190f37d4efd6630cc53e97d853466"
+    },
+    "argon": {
+      "url": "https://github.com/jerrykuku/luci-theme-argon.git",
+      "commit": "81e781c09ecf27e82737a6d46bd7697371d08ba8"
+    }
+  }
+}
