@@ -24,6 +24,8 @@ jobs:
       GOMAXPROCS: '2'
     steps:
       - uses: actions/checkout@v4
+      - name: Check build preparation regressions
+        run: python3 -B -m unittest discover -s r4s -p 'test_*.py' -v
       - name: Install build dependencies
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc

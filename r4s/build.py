@@ -54,7 +54,14 @@ def prepare(tree):
     run("./scripts/feeds", "install", "-a", cwd=tree)
     extras = tree / "package" / "r4s-extras"
     for name, spec in LOCK["extras"].items():
-        checkout(spec, extras / name)
+        # luci.mk derives the package name from the recipe directory name.
+        directory = "luci-theme-argon" if name == "argon" else name
+        checkout(spec, extras / directory)
+    # The pinned LuCI WeeChat UI selects a virtual package whose variants form
+    # a Kconfig cycle. It is not part of this image; leave its source untouched.
+    weechat_ui = tree / "package" / "feeds" / "luci" / "luci-app-weechat"
+    if weechat_ui.is_symlink():
+        weechat_ui.unlink()
     lucky_recipe = extras / "lucky" / "lucky" / "Makefile"
     recipe = lucky_recipe.read_text()
     if "PKG_HASH:=skip" not in recipe:
