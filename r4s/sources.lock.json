@@ -4,6 +4,16 @@
     "commit": "64900e756efa667774214f9c6b17c113222e01f7",
     "version": "25.12.6"
   },
+  "fullcone": {
+    "url": "https://github.com/QiuSimons/YAOF.git",
+    "commit": "8f53c9e82281550477804102e2538486ef13838b",
+    "kernel_release": 1001,
+    "patches": {
+      "kernel.patch": "65c1517f5ed617aa97e5de3e57fbed386c4d18967793916847dbfbfe4a96a55d",
+      "firewall4.patch": "70a952322338ec9b07ec2599dcec4d2834ce863c5339ff224ed77923061deaab",
+      "luci.patch": "e2e196e8e470e91d52b51a0f4bfc7eb157288726a20aded85c711c228114a4f4"
+    }
+  },
   "extras": {
     "passwall": {
       "url": "https://github.com/Openwrt-Passwall/openwrt-passwall.git",

@@ -25,7 +25,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check build preparation regressions
-        run: python3 -B -m unittest discover -s r4s -p 'test_*.py' -v
+        run: |
+          python3 -B -m unittest discover -s r4s -p 'test_*.py' -v
+          node r4s/test_fullcone_ui.cjs
       - name: Install build dependencies
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
@@ -49,6 +51,12 @@ jobs:
         run: |
           set -o pipefail
           make download -j8 2>&1 | tee download.log
+      - name: Verify FullCone source integration
+        working-directory: ${{ runner.temp }}/openwrt
+        run: |
+          make target/linux/prepare V=s
+          make package/firewall4/prepare V=s
+          python3 "$GITHUB_WORKSPACE/r4s/build.py" check-prepared "$PWD"
       - name: Compile firmware
         working-directory: ${{ runner.temp }}/openwrt
         run: |

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare a stock R4S build without importing any device configuration."""
+"""Prepare a pinned R4S build without importing any device configuration."""
 
 import hashlib
 import gzip
@@ -20,6 +20,7 @@ REQUIRED = (
     "luci-app-lucky", "lucky", "luci-app-sqm", "luci-app-nlbwmon",
     "luci-app-upnp", "luci-app-wol", "luci-app-ttyd", "luci-app-filemanager",
     "htop", "ethtool", "tcpdump", "iperf3", "curl", "bind-dig",
+    "kmod-nf-nat", "kmod-nft-nat", "kmod-nft-offload",
 )
 
 
@@ -41,6 +42,77 @@ def checkout(spec, destination):
         raise SystemExit(f"Source revision mismatch: {destination}")
 
 
+def fullcone_patches():
+    paths = {}
+    for name, expected in LOCK["fullcone"]["patches"].items():
+        path = HERE / "patches" / "fullcone" / name
+        if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            raise SystemExit(f"FullCone patch checksum mismatch: {name}")
+        paths[name] = path
+    return paths
+
+
+def prepare_fullcone(tree):
+    patches = fullcone_patches()
+    destinations = {
+        "kernel.patch": "target/linux/generic/hack-6.12/982-r4s-bcm-fullcone.patch",
+        "firewall4.patch": "package/network/config/firewall4/patches/999-r4s-bcm-fullcone.patch",
+    }
+    for name, relative in destinations.items():
+        destination = tree / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            raise SystemExit(f"Refusing to overwrite {destination}")
+        shutil.copyfile(patches[name], destination)
+    target = tree / "target/linux/rockchip/Makefile"
+    source = target.read_text()
+    anchor = "KERNEL_PATCHVER:=6.12\n"
+    if source.count(anchor) != 1 or re.search(r"^LINUX_RELEASE\s*[:?+]?=", source, re.M):
+        raise SystemExit("Rockchip kernel release changed; review FullCone ABI isolation")
+    # OpenWrt's kernel dependency includes this release. Do not impersonate
+    # official modules: the config-only vermagic hash does not cover patches.
+    target.write_text(source.replace(anchor, anchor + f"LINUX_RELEASE:={LOCK['fullcone']['kernel_release']}\n"))
+    luci = tree / "feeds/luci"
+    run("git", "apply", "--check", str(patches["luci.patch"]), cwd=luci)
+    run("git", "apply", str(patches["luci.patch"]), cwd=luci)
+
+
+def check_fullcone(tree):
+    fullcone_patches()
+    for name, relative in (
+        ("kernel.patch", "target/linux/generic/hack-6.12/982-r4s-bcm-fullcone.patch"),
+        ("firewall4.patch", "package/network/config/firewall4/patches/999-r4s-bcm-fullcone.patch"),
+    ):
+        path = tree / relative
+        if not path.exists() or hashlib.sha256(path.read_bytes()).hexdigest() != LOCK["fullcone"]["patches"][name]:
+            raise SystemExit(f"FullCone build patch missing or changed: {name}")
+    target = (tree / "target/linux/rockchip/Makefile").read_text()
+    if f"LINUX_RELEASE:={LOCK['fullcone']['kernel_release']}\n" not in target:
+        raise SystemExit("FullCone kernel package ABI isolation missing")
+    ui = tree / "feeds/luci/applications/luci-app-firewall/htdocs/luci-static/resources/view/firewall/zones.js"
+    if not ui.exists() or '"fullcone4"' not in ui.read_text():
+        raise SystemExit("FullCone LuCI integration missing")
+
+
+def check_fullcone_defaults(firewall):
+    for option in ("fullcone4", "fullcone6"):
+        values = re.findall(rf"^\s*option\s+{option}\s+['\"]?([01])['\"]?\s*$", firewall, re.M)
+        if values != ["0"]:
+            raise SystemExit(f"FullCone must be disabled in initial firewall config: {option}")
+
+
+def check_prepared(tree):
+    check_fullcone(tree)
+    kernels = list(tree.glob("build_dir/target-*/linux-rockchip_armv8/linux-*/net/netfilter/nf_nat_masquerade.c"))
+    firewalls = list(tree.glob("build_dir/target-*/firewall4-*/root/usr/share/ucode/fw4.uc"))
+    if len(kernels) != 1 or "void nf_nat_fullcone_helpers_register(void)" not in kernels[0].read_text():
+        raise SystemExit("Prepared kernel lacks BCM FullCone support")
+    if len(firewalls) != 1 or "function nft_try_brcmfullcone" not in firewalls[0].read_text():
+        raise SystemExit("Prepared firewall4 lacks BCM FullCone support")
+    check_fullcone_defaults((firewalls[0].parents[3] / "etc/config/firewall").read_text())
+    print("Prepared kernel and firewall4 FullCone checks passed (not a runtime NAT test)")
+
+
 def prepare(tree):
     checkout(LOCK["openwrt"], tree)
     # The release already pins all official feeds. Use GitHub mirrors, same SHAs.
@@ -52,11 +124,19 @@ def prepare(tree):
     (tree / "feeds.conf").write_text(feeds)
     run("./scripts/feeds", "update", "-a", cwd=tree)
     run("./scripts/feeds", "install", "-a", cwd=tree)
+    prepare_fullcone(tree)
     extras = tree / "package" / "r4s-extras"
     for name, spec in LOCK["extras"].items():
         # luci.mk derives the package name from the recipe directory name.
         directory = "luci-theme-argon" if name == "argon" else name
         checkout(spec, extras / directory)
+    # Xray 26.10.21 requires Go 1.27; select the pinned official host variant.
+    xray = extras / "passwall_packages/xray-core/Makefile"
+    recipe = xray.read_text()
+    dependency = "PKG_BUILD_DEPENDS:=golang/host"
+    if recipe.count(dependency) != 1 or not (tree / "feeds/packages/lang/golang/golang1.27/Makefile").is_file():
+        raise SystemExit("Xray Go toolchain selection changed; review the pinned recipes")
+    xray.write_text(recipe.replace(dependency, "PKG_BUILD_DEPENDS:=golang1.27/host"))
     # The pinned LuCI WeeChat UI selects a virtual package whose variants form
     # a Kconfig cycle. It is not part of this image; leave its source untouched.
     weechat_ui = tree / "package" / "feeds" / "luci" / "luci-app-weechat"
@@ -103,6 +183,7 @@ def check_config(tree):
         raise SystemExit(f"Missing selections: {missing}; forbidden selections: {forbidden}")
     if (tree / "files").exists():
         raise SystemExit("Unexpected files overlay: no personal configuration may enter this build")
+    check_fullcone(tree)
     print("R4S target, required packages and stock configuration checks passed")
 
 
@@ -139,6 +220,15 @@ def verify_image(image):
                          "etc/init.d/passwall", "etc/init.d/mosdns", "etc/init.d/lucky"):
                 if f"squashfs-root/{name}" not in paths:
                     raise SystemExit(f"Required file missing from firmware: {name}")
+            firewall = run("unsquashfs", "-cat", str(squashfs), "etc/config/firewall", capture=True)
+            check_fullcone_defaults(firewall)
+            fw4 = run("unsquashfs", "-cat", str(squashfs), "usr/share/ucode/fw4.uc", capture=True)
+            if "function nft_try_brcmfullcone" not in fw4:
+                raise SystemExit("FullCone fw4 support missing from firmware")
+            ui = run("unsquashfs", "-cat", str(squashfs),
+                     "www/luci-static/resources/view/firewall/zones.js", capture=True)
+            if '"fullcone4"' not in ui and "'fullcone4'" not in ui:
+                raise SystemExit("FullCone LuCI support missing from firmware")
 
 
 def collect(tree, output):
@@ -152,6 +242,8 @@ def collect(tree, output):
     if len(manifests) != 1:
         raise SystemExit("R4S image manifest missing")
     packages = {line.split()[0] for line in manifests[0].read_text().splitlines() if line.strip()}
+    if not re.search(rf"^kernel\s+-\s+\S+-r{LOCK['fullcone']['kernel_release']}$", manifests[0].read_text(), re.M):
+        raise SystemExit("Firmware manifest lacks the isolated FullCone kernel package release")
     missing = set(REQUIRED) - packages
     if missing:
         raise SystemExit(f"Required packages missing from image manifest: {sorted(missing)}")
@@ -162,10 +254,10 @@ def collect(tree, output):
     for name in ("sources.lock.buildinfo", "feeds.revisions.buildinfo", "config.seed.buildinfo"):
         shutil.copy2(tree / name, output / name)
     shutil.copy2(tree / ".config", output / "full.config.buildinfo")
-    if (tree / "key-build.pub").exists():
-        shutil.copy2(tree / "key-build.pub", output / "key-build.pub")
+    if (tree / "public-key.pem").exists():
+        shutil.copy2(tree / "public-key.pem", output / "public-key.pem")
     run("tar", "--zstd", "-cf", str(output / "r4s-apk-packages.tar.zst"),
-        "-C", str(tree / "bin"), "packages")
+        "-C", str(tree / "bin"), "packages", "targets/rockchip/armv8/packages")
     sums = []
     for file in sorted(output.iterdir()):
         if file.is_file() and file.name != "SHA256SUMS":
@@ -183,6 +275,8 @@ if __name__ == "__main__":
         prepare(tree)
     elif command == "check-config":
         check_config(tree)
+    elif command == "check-prepared":
+        check_prepared(tree)
     elif command == "collect":
         collect(tree, Path(sys.argv[3]).resolve())
     else:

@@ -9,8 +9,20 @@ nlbwmon, UPnP, WOL, ttyd, file manager and diagnostic tools. No Docker.
 All applications keep their upstream initial configuration. No device backup,
 credentials, subscriptions, network overrides or files overlay is imported.
 
-Uses stock OpenWrt kernel, clock and driver configuration. No vermagic
-override, custom kernel, CPU overclock or performance benchmark is included.
+Adds the public YAOF BCM FullCone kernel/fw4/LuCI patches, pinned to commit
+8f53c9e82281550477804102e2538486ef13838b with local SHA256 checks. FullCone
+IPv4 and IPv6 are both disabled initially; the Firewall page provides the
+switch. Enabling IPv4 does not enable NAT6. No YAOF default-settings package,
+personal configuration, CPU overclock or vermagic override is imported.
+
+This is now a patched kernel. Its package release is 1001, distinct from the
+official release, so official kmods cannot silently replace the matching ones.
+Use modules from the same build archive; do not force-install official kmods.
+Clock and network driver selections remain upstream defaults.
+
+FullCone permits unsolicited UDP traffic to existing mapped endpoints. Review
+service listening addresses and inbound policy before enabling it. Patch and
+image checks are not a live NAT or security certification.
 
 Extra applications use their publicly maintained OpenWrt package definitions:
 PassWall's feeds, sbwml's MosDNS/LuCI feed, Lucky's official feed and Argon.
@@ -26,7 +38,9 @@ uploaded. Official device package repository configuration is retained.
 Additional apps are independently packaged, not copied as unmanaged binaries.
 They can be updated using compatible upstream APK releases or a new build;
 this does not promise the official OpenWrt server hosts third-party packages.
-Kernel modules must match the firmware kernel ABI. The first build does not
+The archive includes target-specific module packages and indexes, and the APK
+public key (never the private key). Kernel modules must match the firmware
+kernel package release and ABI. The first build does not
 publish or configure an automatic third-party APK update server.
 
 This workflow verifies package selection and image manifest. A successful
