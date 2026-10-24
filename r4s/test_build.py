@@ -15,7 +15,7 @@ class BuildTests(unittest.TestCase):
     def integration_fixture(self, tree):
         fixtures = {
             "feeds/packages/net/miniupnpd/files/miniupnpd.init": "\t\tupnpd_write_bool secure_mode 1\n",
-            "feeds/luci/applications/luci-app-upnp/htdocs/luci-static/resources/view/services/upnp.js":
+            "feeds/luci/applications/luci-app-upnp/htdocs/luci-static/resources/view/upnp/upnp.js":
                 "\t\to = s.taboption('advanced', form.Flag, 'secure_mode', _('Enable secure mode'),\n",
             "package/r4s-extras/passwall/luci-app-passwall/root/usr/share/passwall/nftables.sh":
                 "start)\n\tstart\n\t;;\nstop)\n\tstop\n\t;;\n",

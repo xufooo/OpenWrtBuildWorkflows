@@ -142,7 +142,7 @@ def prepare_integrations(tree):
     upnp = tree / "feeds/packages/net/miniupnpd/files/miniupnpd.init"
     replace_once(upnp, "\t\tupnpd_write_bool secure_mode 1\n",
                  "\t\tupnpd_write_bool secure_mode 1\n\t\tupnpd_write_bool ext_allow_private_ipv4 0\n")
-    ui = tree / "feeds/luci/applications/luci-app-upnp/htdocs/luci-static/resources/view/services/upnp.js"
+    ui = tree / "feeds/luci/applications/luci-app-upnp/htdocs/luci-static/resources/view/upnp/upnp.js"
     anchor = "\t\to = s.taboption('advanced', form.Flag, 'secure_mode', _('Enable secure mode'),"
     replace_once(ui, anchor, "\t\to = s.taboption('advanced', form.Flag, 'ext_allow_private_ipv4', _('Allow private IPv4 WAN'));\n"
                  "\t\to.default = '0';\n\t\to.rmempty = false;\n\n" + anchor)

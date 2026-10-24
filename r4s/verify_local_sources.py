@@ -38,7 +38,7 @@ if __name__ == "__main__":
         subprocess.run(["git", "apply", str(HERE / "patches/pcie-reset.patch")], cwd=kernel, check=True)
         export(packages, "093d551675b1119a06ef224d419905e8d6b2af1a", "net/miniupnpd/files/miniupnpd.init",
                tree, "feeds/packages/net/miniupnpd/files/miniupnpd.init")
-        ui = tree / "feeds/luci/applications/luci-app-upnp/htdocs/luci-static/resources/view/services/upnp.js"
+        ui = tree / "feeds/luci/applications/luci-app-upnp/htdocs/luci-static/resources/view/upnp/upnp.js"
         ui.parent.mkdir(parents=True)
         ui.write_bytes(upnp_ui.read_bytes())
         pw = export(passwall, build.LOCK["extras"]["passwall"]["commit"],
