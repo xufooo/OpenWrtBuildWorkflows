@@ -1,0 +1,10 @@
+{
+  "r4s-accel": {
+    "description": "Manage selective native flowtable admission",
+    "read": {
+      "uci": ["r4s_accel", "network"],
+      "file": { "/var/run/r4s-accel/status": ["read"] }
+    },
+    "write": { "uci": ["r4s_accel"] }
+  }
+}

@@ -1,0 +1,55 @@
+From: R4S build maintainers
+Subject: [PATCH] fw4: suspend external selective admission across mutations
+
+Keep the normal fw4 ruleset and flowtable machinery unchanged. The optional
+helper owns only its separate table. Abort mutation if suspension fails;
+failed reloads leave admission closed. Do not hook read-only check/print.
+
+--- a/root/sbin/fw4
++++ b/root/sbin/fw4
+@@ -14,6 +14,11 @@
+ 
+ [ -t 2 ] && export TTY=1
+ 
++# r4s-accel lifecycle v1
++r4s_accel() {
++	[ ! -x /usr/libexec/r4s-accel ] || /usr/libexec/r4s-accel "$@"
++}
++
+ die() {
+ 	[ -n "$QUIET" ] || echo "$@" >&2
+ 	exit 1
+@@ -44,7 +49,7 @@
+ 		esac
+ 
+ 		ACTION=start \
+-			utpl -S $MAIN | nft $VERBOSE -f $STDIN
++			utpl -S $MAIN | nft $VERBOSE -f $STDIN || return 1
+ 
+ 		ACTION=includes \
+ 			utpl -S $MAIN
+@@ -119,16 +124,22 @@
+ case "$1" in
+ 	start|reload)
+-		start "$1"
++		r4s_accel suspend firewall || die "Cannot suspend selective admission"
++		start "$1" || die "Firewall load failed; selective admission remains suspended"
++		r4s_accel resume firewall || true
+ 	;;
+ 	stop)
++		r4s_accel suspend firewall || die "Cannot suspend selective admission"
+ 		stop || die "The fw4 firewall does not appear to be loaded, try fw4 flush to delete all rules."
+ 	;;
+ 	flush)
++		r4s_accel suspend firewall || die "Cannot suspend selective admission"
+ 		flush
+ 	;;
+ 	restart)
+ 		QUIET=1 print | nft ${VERBOSE} -c -f $STDIN || die "The rendered ruleset contains errors, not doing firewall restart."
++		r4s_accel suspend firewall || die "Cannot suspend selective admission"
+ 		stop || rm -f $STATE
+-		start
++		start || die "Firewall load failed; selective admission remains suspended"
++		r4s_accel resume firewall || true
+ 	;;
+ 	check)

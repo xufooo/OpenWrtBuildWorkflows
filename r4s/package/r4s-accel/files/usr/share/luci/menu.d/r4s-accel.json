@@ -1,0 +1,8 @@
+{
+  "admin/network/r4s_accel": {
+    "title": "Selective Acceleration",
+    "order": 65,
+    "action": { "type": "view", "path": "network/r4s_accel" },
+    "depends": { "acl": ["r4s-accel"], "uci": { "r4s_accel": true } }
+  }
+}

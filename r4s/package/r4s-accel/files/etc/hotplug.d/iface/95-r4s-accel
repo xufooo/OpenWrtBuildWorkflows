@@ -1,0 +1,4 @@
+#!/bin/sh
+case "$ACTION" in
+	ifup|ifdown|ifupdate) /usr/libexec/r4s-accel reload ;;
+esac

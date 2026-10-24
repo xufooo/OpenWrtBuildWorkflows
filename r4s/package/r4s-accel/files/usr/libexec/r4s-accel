@@ -1,0 +1,135 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+STATE=/var/run/r4s-accel
+. /lib/functions.sh
+. /lib/functions/network.sh
+mkdir -p "$STATE" || exit 1
+exec 9>"$STATE/lock"
+flock -x 9 || exit 1
+
+valid_name() {
+	case "$1" in ''|*[!a-zA-Z0-9_.:-]*) return 1 ;; esac
+}
+
+teardown() {
+	if nft list table inet r4s_accel >/dev/null 2>&1; then
+		nft delete table inet r4s_accel || return 1
+	fi
+	# Only previously admitted LAN sources are drained, never all conntrack.
+	if [ -f "$STATE/active" ]; then
+		while IFS= read -r host; do
+			LC_ALL=C conntrack -D -f ipv4 -s "$host" >/dev/null 2>"$STATE/drain-error" || {
+				grep -q '0 flow entries' "$STATE/drain-error" || return 1
+			}
+		done < "$STATE/active"
+		rm -f "$STATE/active"
+	fi
+}
+
+devices() {
+	local dev="$1" entry child
+	valid_name "$dev" && [ "$dev" != lo ] && [ -d "/sys/class/net/$dev" ] || return 1
+	printf '"%s"\n' "$dev"
+	for entry in /sys/class/net/"$dev"/brif/* /sys/class/net/"$dev"/lower_*; do
+		[ -e "$entry" ] || continue
+		child=${entry##*/}; child=${child#lower_}
+		devices "$child" || return 1
+	done
+}
+
+apply() {
+	local lan wan lan_phys wan_phys lan_net wan_net enabled proto hosts devs
+	for entry in "$STATE"/blocked.*; do
+		[ ! -e "$entry" ] || { echo "Suspended: ${entry##*.}" > "$STATE/status"; return 0; }
+	done
+	for file in /sbin/fw4 /usr/share/passwall/nftables.sh /etc/init.d/sqm; do
+		grep -q 'r4s-accel lifecycle v1' "$file" || {
+			echo 'Lifecycle integration missing; rebuild matching packages' > "$STATE/status"; return 0;
+		}
+	done
+	config_load r4s_accel
+	config_get lan_net main lan lan
+	config_get wan_net main wan wan
+	valid_name "$lan_net" && valid_name "$wan_net" || return 1
+	network_get_device lan "$lan_net" && network_get_device wan "$wan_net" || {
+		echo 'Interfaces not ready' > "$STATE/status"; return 0;
+	}
+	valid_name "$lan" && valid_name "$wan" && [ "$lan" != "$wan" ] || return 1
+	network_get_physdev lan_phys "$lan_net"
+	network_get_physdev wan_phys "$wan_net"
+	R4S_PSW_READY=0
+	nft list chain inet passwall PSW_MANGLE >/dev/null 2>&1 && R4S_PSW_READY=1
+	export R4S_PSW_READY
+	lua /usr/share/r4s-accel/plan.lua > "$STATE/next" 2> "$STATE/status" || return 1
+	[ -s "$STATE/next" ] || return 0
+	ip -4 rule show > "$STATE/iprules" || return 1
+	awk '
+		$1 == "0:" && $2 == "from" && $3 == "all" && $4 == "lookup" && $5 == "local" && NF == 5 { next }
+		$1 == "32766:" && $2 == "from" && $3 == "all" && $4 == "lookup" && $5 == "main" && NF == 5 { next }
+		$1 == "32767:" && $2 == "from" && $3 == "all" && $4 == "lookup" && $5 == "default" && NF == 5 { next }
+		$1 == "999:" && $2 == "from" && $3 == "all" && $4 == "fwmark" && $5 == "0x50535731" && $6 == "lookup" && $7 == "999" && NF == 7 { next }
+		{ bad = 1 }
+		END { exit bad }
+	' "$STATE/iprules" || { echo 'Unsupported policy routing: normal forwarding retained' > "$STATE/status"; return 0; }
+	# Do not create a bypass when the main firewall is absent.
+	nft list chain inet fw4 forward >/dev/null 2>&1 || return 1
+	# An additional forward base chain could reject a packet after admission.
+	nft -j list ruleset > "$STATE/ruleset.json" || return 1
+	for field in name table family; do
+		case "$field" in name) expected=forward ;; table) expected=fw4 ;; family) expected=inet ;; esac
+		value=$(jsonfilter -i "$STATE/ruleset.json" -e "@.nftables[@.chain.hook='forward'].chain.$field") || return 1
+		[ "$value" = "$expected" ] || {
+			echo 'Additional forward chains: normal forwarding retained' > "$STATE/status"; return 0;
+		}
+	done
+	{
+		devices "$lan" && devices "$wan" || return 1
+		[ -z "$lan_phys" ] || devices "$lan_phys" || return 1
+		[ -z "$wan_phys" ] || devices "$wan_phys" || return 1
+	} > "$STATE/devices" || return 1
+	devs=$(sort -u "$STATE/devices" | awk 'NR > 1 { printf "," } { printf "%s", $0 }')
+	[ -n "$devs" ] || return 1
+	hosts=$(awk 'NR > 1 { printf "," } { printf "%s", $0 }' "$STATE/next")
+	proto='tcp, udp'
+	config_load firewall
+	fullcone_udp() {
+		config_get enabled "$1" fullcone4 0
+		[ "$enabled" != 1 ] || proto=tcp
+	}
+	config_foreach fullcone_udp defaults
+	cat > "$STATE/rules" <<EOF
+table inet r4s_accel {
+	flowtable ft { hook ingress priority 0; devices = { $devs }; counter; }
+	set direct { type ipv4_addr; elements = { $hosts }; }
+	chain admit {
+		type filter hook forward priority 10; policy accept;
+		ct state != established return
+		ct status dnat return
+		ct mark != 0 return
+		meta mark != 0 return
+		ct status assured ct original ip saddr @direct iifname "$lan" oifname "$wan" meta l4proto { $proto } flow add @ft
+		ct status assured ct original ip saddr @direct iifname "$wan" oifname "$lan" meta l4proto { $proto } flow add @ft
+	}
+}
+EOF
+	nft -c -f "$STATE/rules" && nft -f "$STATE/rules" || return 1
+	cp "$STATE/next" "$STATE/active"
+}
+
+case "$1" in
+	suspend)
+		case "$2" in firewall|passwall|sqm|service) ;; *) exit 1 ;; esac
+		touch "$STATE/blocked.$2"
+		teardown || exit 1
+		echo "Suspended: $2" > "$STATE/status"
+		;;
+	resume)
+		case "$2" in firewall|passwall|sqm|service) ;; *) exit 1 ;; esac
+		rm -f "$STATE/blocked.$2"
+		teardown && apply || { teardown; echo 'Admission failed: normal forwarding retained' > "$STATE/status"; exit 1; }
+		;;
+	reload)
+		teardown && apply || { teardown; echo 'Admission failed: normal forwarding retained' > "$STATE/status"; exit 1; }
+		;;
+	*) exit 1 ;;
+esac

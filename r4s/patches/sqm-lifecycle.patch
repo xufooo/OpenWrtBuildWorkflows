@@ -1,0 +1,26 @@
+From: R4S build maintainers
+Subject: [PATCH] sqm: quiesce selective admission before qdisc changes
+
+--- a/platform/openwrt/sqm-init
++++ b/platform/openwrt/sqm-init
+@@ -19,11 +19,20 @@
+ start_service()
+ {
++	# r4s-accel lifecycle v1
++	[ ! -x /usr/libexec/r4s-accel ] || /usr/libexec/r4s-accel suspend sqm || return 1
+ 	/usr/lib/sqm/run.sh start "$@"
++	local result=$?
++	[ "$result" = 0 ] || return "$result"
++	[ ! -x /usr/libexec/r4s-accel ] || /usr/libexec/r4s-accel resume sqm
+ }
+ 
+ stop_service()
+ {
++	[ ! -x /usr/libexec/r4s-accel ] || /usr/libexec/r4s-accel suspend sqm || return 1
+ 	/usr/lib/sqm/run.sh stop "$@"
++	local result=$?
++	[ "$result" = 0 ] || return "$result"
++	[ ! -x /usr/libexec/r4s-accel ] || /usr/libexec/r4s-accel resume sqm
+ }
+ 
+ boot()

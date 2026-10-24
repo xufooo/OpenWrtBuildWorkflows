@@ -20,7 +20,7 @@ REQUIRED = (
     "luci-app-lucky", "lucky", "luci-app-sqm", "luci-app-nlbwmon",
     "luci-app-upnp", "luci-app-wol", "luci-app-ttyd", "luci-app-filemanager",
     "htop", "ethtool", "tcpdump", "iperf3", "curl", "bind-dig",
-    "kmod-nf-nat", "kmod-nft-nat", "kmod-nft-offload",
+    "kmod-nf-nat", "kmod-nft-nat", "kmod-nft-offload", "r4s-accel", "conntrack",
 )
 
 
@@ -90,7 +90,7 @@ def check_fullcone(tree):
     if f"LINUX_RELEASE:={LOCK['fullcone']['kernel_release']}\n" not in target:
         raise SystemExit("FullCone kernel package ABI isolation missing")
     ui = tree / "feeds/luci/applications/luci-app-firewall/htdocs/luci-static/resources/view/firewall/zones.js"
-    if not ui.exists() or '"fullcone4"' not in ui.read_text():
+    if not ui.exists() or not re.search(r"['\"]fullcone4['\"]", ui.read_text()):
         raise SystemExit("FullCone LuCI integration missing")
 
 
@@ -110,7 +110,50 @@ def check_prepared(tree):
     if len(firewalls) != 1 or "function nft_try_brcmfullcone" not in firewalls[0].read_text():
         raise SystemExit("Prepared firewall4 lacks BCM FullCone support")
     check_fullcone_defaults((firewalls[0].parents[3] / "etc/config/firewall").read_text())
-    print("Prepared kernel and firewall4 FullCone checks passed (not a runtime NAT test)")
+    pcie = kernels[0].parents[2] / "drivers/phy/rockchip/phy-rockchip-pcie.c"
+    if "rockchip_pcie_phy_reset(rk_phy);" not in pcie.read_text():
+        raise SystemExit("Prepared kernel lacks PCIe probe reset")
+    fw4_cli = firewalls[0].parents[3] / "sbin/fw4"
+    if "r4s-accel lifecycle v1" not in fw4_cli.read_text():
+        raise SystemExit("Prepared firewall4 lacks admission lifecycle hooks")
+    print("Prepared FullCone, PCIe and admission hooks passed (not a runtime network test)")
+
+
+def replace_once(path, before, after):
+    text = path.read_text()
+    if text.count(before) != 1:
+        raise SystemExit(f"Pinned source changed; review integration: {path}")
+    path.write_text(text.replace(before, after))
+
+
+def prepare_integrations(tree):
+    destinations = {
+        "pcie-reset.patch": "target/linux/rockchip/patches-6.12/402-1-r4s-pcie-reset.patch",
+        "firewall4-lifecycle.patch": "package/network/config/firewall4/patches/998-r4s-lifecycle.patch",
+        "sqm-lifecycle.patch": "feeds/packages/net/sqm-scripts/patches/950-r4s-lifecycle.patch",
+    }
+    for name, relative in destinations.items():
+        destination = tree / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            raise SystemExit(f"Refusing to overwrite {destination}")
+        shutil.copyfile(HERE / "patches" / name, destination)
+    shutil.copytree(HERE / "package/r4s-accel", tree / "package/r4s-accel")
+    upnp = tree / "feeds/packages/net/miniupnpd/files/miniupnpd.init"
+    replace_once(upnp, "\t\tupnpd_write_bool secure_mode 1\n",
+                 "\t\tupnpd_write_bool secure_mode 1\n\t\tupnpd_write_bool ext_allow_private_ipv4 0\n")
+    ui = tree / "feeds/luci/applications/luci-app-upnp/htdocs/luci-static/resources/view/services/upnp.js"
+    anchor = "\t\to = s.taboption('advanced', form.Flag, 'secure_mode', _('Enable secure mode'),"
+    replace_once(ui, anchor, "\t\to = s.taboption('advanced', form.Flag, 'ext_allow_private_ipv4', _('Allow private IPv4 WAN'));\n"
+                 "\t\to.default = '0';\n\t\to.rmempty = false;\n\n" + anchor)
+    pw = tree / "package/r4s-extras/passwall/luci-app-passwall/root/usr/share/passwall/nftables.sh"
+    for action in ("start", "stop"):
+        before = f"{action})\n\t{action}\n\t;;"
+        after = (f"{action})\n\t# r4s-accel lifecycle v1\n"
+                 "\t[ ! -x /usr/libexec/r4s-accel ] || /usr/libexec/r4s-accel suspend passwall || exit 1\n"
+                 f"\t{action}\n\tresult=$?\n\t[ \"$result\" = 0 ] || exit \"$result\"\n"
+                 "\t[ ! -x /usr/libexec/r4s-accel ] || /usr/libexec/r4s-accel resume passwall\n\t;;")
+        replace_once(pw, before, after)
 
 
 def prepare(tree):
@@ -130,6 +173,7 @@ def prepare(tree):
         # luci.mk derives the package name from the recipe directory name.
         directory = "luci-theme-argon" if name == "argon" else name
         checkout(spec, extras / directory)
+    prepare_integrations(tree)
     # Xray 26.10.21 requires Go 1.27; select the pinned official host variant.
     xray = extras / "passwall_packages/xray-core/Makefile"
     recipe = xray.read_text()
@@ -177,6 +221,8 @@ def check_config(tree):
     ):
         if f"CONFIG_{option}=y" not in config:
             missing.append(option)
+    if 'CONFIG_TARGET_OPTIMIZATION="-O2 -pipe -mcpu=generic"' not in config:
+        missing.append("O2 with unchanged generic AArch64 ISA")
     forbidden = [line for line in config if re.match(
         r"CONFIG_PACKAGE_(dockerd|luci-app-dockerman|luci-app-openclash|luci-app-homeproxy|luci-app-ssr-plus)=y$", line)]
     if missing or forbidden:
@@ -184,6 +230,13 @@ def check_config(tree):
     if (tree / "files").exists():
         raise SystemExit("Unexpected files overlay: no personal configuration may enter this build")
     check_fullcone(tree)
+    for name, relative in (
+        ("pcie-reset.patch", "target/linux/rockchip/patches-6.12/402-1-r4s-pcie-reset.patch"),
+        ("firewall4-lifecycle.patch", "package/network/config/firewall4/patches/998-r4s-lifecycle.patch"),
+        ("sqm-lifecycle.patch", "feeds/packages/net/sqm-scripts/patches/950-r4s-lifecycle.patch"),
+    ):
+        if (tree / relative).read_bytes() != (HERE / "patches" / name).read_bytes():
+            raise SystemExit(f"Integration patch missing or changed: {name}")
     print("R4S target, required packages and stock configuration checks passed")
 
 
@@ -217,11 +270,21 @@ def verify_image(image):
             listing = set(run("unsquashfs", "-lln", str(squashfs), capture=True).splitlines())
             paths = {line.split()[-1] for line in listing if line.split()}
             for name in ("usr/bin/mosdns", "usr/bin/sing-box", "usr/bin/xray", "usr/bin/lucky",
-                         "etc/init.d/passwall", "etc/init.d/mosdns", "etc/init.d/lucky"):
+                         "etc/init.d/passwall", "etc/init.d/mosdns", "etc/init.d/lucky",
+                         "usr/libexec/r4s-accel", "usr/share/r4s-accel/policy.lua"):
                 if f"squashfs-root/{name}" not in paths:
                     raise SystemExit(f"Required file missing from firmware: {name}")
             firewall = run("unsquashfs", "-cat", str(squashfs), "etc/config/firewall", capture=True)
             check_fullcone_defaults(firewall)
+            for path in ("sbin/fw4", "usr/share/passwall/nftables.sh", "etc/init.d/sqm"):
+                if "r4s-accel lifecycle v1" not in run("unsquashfs", "-cat", str(squashfs), path, capture=True):
+                    raise SystemExit(f"Admission lifecycle hook missing from firmware: {path}")
+            accel = run("unsquashfs", "-cat", str(squashfs), "etc/config/r4s_accel", capture=True)
+            if "option enabled '0'" not in accel or "list hosts" in accel:
+                raise SystemExit("Selective acceleration must start disabled with no host configuration")
+            upnp = run("unsquashfs", "-cat", str(squashfs), "etc/init.d/miniupnpd", capture=True)
+            if "upnpd_write_bool ext_allow_private_ipv4 0" not in upnp:
+                raise SystemExit("UPnP private WAN option missing")
             fw4 = run("unsquashfs", "-cat", str(squashfs), "usr/share/ucode/fw4.uc", capture=True)
             if "function nft_try_brcmfullcone" not in fw4:
                 raise SystemExit("FullCone fw4 support missing from firmware")

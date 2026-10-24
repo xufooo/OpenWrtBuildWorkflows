@@ -12,6 +12,19 @@ SPEC.loader.exec_module(build)
 
 
 class BuildTests(unittest.TestCase):
+    def integration_fixture(self, tree):
+        fixtures = {
+            "feeds/packages/net/miniupnpd/files/miniupnpd.init": "\t\tupnpd_write_bool secure_mode 1\n",
+            "feeds/luci/applications/luci-app-upnp/htdocs/luci-static/resources/view/services/upnp.js":
+                "\t\to = s.taboption('advanced', form.Flag, 'secure_mode', _('Enable secure mode'),\n",
+            "package/r4s-extras/passwall/luci-app-passwall/root/usr/share/passwall/nftables.sh":
+                "start)\n\tstart\n\t;;\nstop)\n\tstop\n\t;;\n",
+        }
+        for relative, content in fixtures.items():
+            path = tree / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+
     def fullcone_fixture(self, tree):
         target = tree / "target/linux/rockchip/Makefile"
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -25,10 +38,11 @@ class BuildTests(unittest.TestCase):
             tree = Path(temp) / "openwrt"
 
             def checkout(spec, destination):
-                destination.mkdir(parents=True)
+                destination.mkdir(parents=True, exist_ok=True)
                 if spec is build.LOCK["openwrt"]:
                     (destination / "feeds.conf.default").write_text("")
                     self.fullcone_fixture(destination)
+                    self.integration_fixture(destination)
                     golang = destination / "feeds/packages/lang/golang/golang1.27/Makefile"
                     golang.parent.mkdir(parents=True)
                     golang.touch()
@@ -71,9 +85,13 @@ class BuildTests(unittest.TestCase):
             "SING_BOX_BUILD_UTLS", "SING_BOX_BUILD_QUIC", "SING_BOX_BUILD_GRPC",
         )]
         (tree / ".config").write_text("\n".join(options) + "\n")
+        with (tree / ".config").open("a") as config:
+            config.write('CONFIG_TARGET_OPTIMIZATION="-O2 -pipe -mcpu=generic"\n')
         self.fullcone_fixture(tree)
         with patch.object(build, "run"):
             build.prepare_fullcone(tree)
+        self.integration_fixture(tree)
+        build.prepare_integrations(tree)
 
     def test_fullcone_patch_tampering_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -108,6 +126,12 @@ class BuildTests(unittest.TestCase):
             config = root / "etc/config/firewall"
             config.parent.mkdir(parents=True)
             config.write_text("option fullcone4 0\noption fullcone6 0\n")
+            pcie = kernel.parents[2] / "drivers/phy/rockchip/phy-rockchip-pcie.c"
+            pcie.parent.mkdir(parents=True)
+            pcie.write_text("rockchip_pcie_phy_reset(rk_phy);\n")
+            cli = root / "sbin/fw4"
+            cli.parent.mkdir(parents=True)
+            cli.write_text("# r4s-accel lifecycle v1\n")
             build.check_prepared(tree)
             fw4.write_text("stock fw4\n")
             with self.assertRaisesRegex(SystemExit, "Prepared firewall4"):
@@ -120,6 +144,14 @@ class BuildTests(unittest.TestCase):
             (tree / "target/linux/rockchip/Makefile").write_text("KERNEL_PATCHVER:=6.12\n")
             with self.assertRaisesRegex(SystemExit, "ABI isolation"):
                 build.check_fullcone(tree)
+
+    def test_fullcone_luci_accepts_upstream_single_quotes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            tree = Path(temp)
+            self.make_config(tree)
+            ui = tree / "feeds/luci/applications/luci-app-firewall/htdocs/luci-static/resources/view/firewall/zones.js"
+            ui.write_text("var option = 'fullcone4';\n")
+            build.check_fullcone(tree)
 
     def test_fullcone_defaults_are_off_in_pinned_patch(self):
         source = build.fullcone_patches()["firewall4.patch"].read_text()
@@ -161,6 +193,24 @@ class BuildTests(unittest.TestCase):
             tree = Path(temp)
             self.make_config(tree)
             build.check_config(tree)
+
+    def test_additional_patches_are_valid_diffs(self):
+        for path in (build.HERE / "patches").glob("*.patch"):
+            build.run("git", "apply", "--numstat", str(path), capture=True)
+
+    def test_integration_does_not_rewrite_passwall_routing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            tree = Path(temp)
+            self.integration_fixture(tree)
+            build.prepare_integrations(tree)
+            pw = (tree / "package/r4s-extras/passwall/luci-app-passwall/root/usr/share/passwall/nftables.sh").read_text()
+            self.assertEqual(pw.count("suspend passwall"), 2)
+            self.assertEqual(pw.count("resume passwall"), 2)
+            self.assertNotIn("mark set", pw)
+            config = (tree / "package/r4s-accel/files/etc/config/r4s_accel").read_text()
+            self.assertIn("option enabled '0'", config)
+            self.assertNotIn("list hosts", config)
+            self.assertIn("ext_allow_private_ipv4 0", (tree / "feeds/packages/net/miniupnpd/files/miniupnpd.init").read_text())
 
     def test_missing_theme_still_fails(self):
         with tempfile.TemporaryDirectory() as temp:

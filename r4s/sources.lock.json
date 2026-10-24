@@ -7,7 +7,7 @@
   "fullcone": {
     "url": "https://github.com/QiuSimons/YAOF.git",
     "commit": "8f53c9e82281550477804102e2538486ef13838b",
-    "kernel_release": 1001,
+    "kernel_release": 1002,
     "patches": {
       "kernel.patch": "65c1517f5ed617aa97e5de3e57fbed386c4d18967793916847dbfbfe4a96a55d",
       "firewall4.patch": "70a952322338ec9b07ec2599dcec4d2834ce863c5339ff224ed77923061deaab",

@@ -1,0 +1,19 @@
+#!/bin/sh /etc/rc.common
+START=99
+USE_PROCD=1
+
+start_service() {
+	/usr/libexec/r4s-accel resume service
+}
+
+reload_service() {
+	/usr/libexec/r4s-accel reload
+}
+
+stop_service() {
+	/usr/libexec/r4s-accel suspend service
+}
+
+service_triggers() {
+	procd_add_reload_trigger r4s_accel passwall sqm firewall
+}
