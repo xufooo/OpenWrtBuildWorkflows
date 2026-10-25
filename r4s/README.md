@@ -1,4 +1,4 @@
-# R4S first build
+# R4S firmware build
 
 OpenWrt 25.12.6, rockchip/armv8, NanoPi R4S squashfs image. The source commit
 and extra package repositories are recorded in sources.lock.json; official
@@ -43,8 +43,8 @@ this does not promise the official OpenWrt server hosts third-party packages.
 The archive includes target-specific module packages and indexes, and the APK
 public key (never the private key). Kernel modules must match the firmware
 kernel package release and ABI (now release 1002, changed with the PCIe patch).
-The first build does not
-publish or configure an automatic third-party APK update server.
+The build does not publish or configure an automatic third-party APK update
+server.
 
 This workflow verifies package selection and image manifest. A successful
 build is not a claim of hardware boot validation or increased performance.
@@ -55,54 +55,36 @@ build is not a claim of hardware boot validation or increased performance.
   power-on fix. This targets warm-reboot initialization, not faster Ethernet.
 - Expose miniupnpd 2.3.9's existing ext_allow_private_ipv4 option in UCI/LuCI,
   default off. Keep the official core, secure_mode and inbound policy.
-- Add the source-packaged r4s-accel controller and LuCI Network page. It uses
-  native nftables flowtables, with no fw4 template replacement, SFE or NATFlow.
-  It starts disabled, with an empty host list and no imported device settings.
 
-## Selective admission contract
+## Native software flow offloading
 
-Select individual, stable IPv4 LAN host addresses on the acceleration page.
-When PassWall is enabled, these must also be individual IP sources in enabled
-PassWall No Proxy ACLs, with ACL processing enabled. This first implementation
-rejects mixed proxy/no-proxy ACLs, wildcard, interface, MAC, range and set ACLs
-rather than guessing their precedence. Ordinary default PassWall proxy rules
-can coexist with those explicit no-proxy ACLs for other clients. If PassWall
-is entirely disabled, the acceleration host allowlist alone is sufficient.
-There is no automatic admission of all domestic/domain-classified traffic.
+Use the upstream Firewall page's software flow offloading option. The retired
+r4s-accel package, device allowlist page and its fw4/PassWall/SQM lifecycle hooks
+are removed. No replacement forwarding chain, automatic China-IP classifier,
+SFE, NATFlow or conntrack-flushing service is added. PassWall and SQM source
+scripts remain unmodified by this build.
 
-Leave the standard firewall software/hardware offload switches off: they are
-the broad native admission path, not this controller's switch. The controller
-refuses to add flows when they are enabled. Its separate forward base chain
-runs at priority 10, after fw4's priority 0 filtering, and requires established,
-assured, unmarked LAN/WAN traffic with an explicitly allowed original source.
-DNAT and nonmatching interfaces are excluded. Logical, bridge member and lower
-physical devices are collected using stock netifd/sysfs interfaces.
+The image keeps upstream initial offloading settings; it does not enable
+software or hardware offloading automatically. FullCone remains a separate,
+initially disabled option. Hardware flow offloading requires supported hardware
+and drivers; a visible switch alone is not evidence of support.
 
-IPv6 stays on the normal path; it is not disabled. With IPv4 FullCone enabled,
-UDP also stays on the normal path; only eligible TCP is accelerated. Any enabled
-SQM queue, installed pbr/mwan3 configuration or unknown IPv4 policy-routing rule
-disables admission. Additional forward base chains also disable it, rather than
-offloading ahead of an unknown later filter. Existing SQM/IPv6/FullCone
-mechanisms are not reimplemented.
+Native software offloading operates on eligible forwarded connections. Traffic
+redirected to a local proxy and a user's request to use a proxy core's direct
+outbound are not equivalent to ordinary kernel forwarding. The build does not
+claim to accelerate all traffic classified as domestic, or speed up encryption
+and remote proxy nodes. Software offloading and SQM are not unconditionally
+exclusive; interface placement, shaping and classification still matter.
 
-Small lifecycle hooks suspend admission before fw4, PassWall nft and SQM rule
-changes. They delete only the controller's own table and drain conntrack only
-for previously admitted source hosts. This intentionally interrupts those
-hosts' established connections during reload; it does not claim seamless TCP
-migration. Failed suspension aborts the hooked mutation. Failed reconfiguration
-leaves admission closed. Interface changes also rebuild admission. DNS-set
-changes do not grant admission: eligible hosts must be outside proxy/domain
-classification, so no duplicate DNS-set watcher or custom DNS stack is added.
+Flowtables cache existing connection paths. A policy change is not a guarantee
+that every established connection is immediately reclassified. This revision
+does not add policy-change experiments, force-close connections or promise
+seamless migration. Keep runtime settings and any backup migration separate
+from this clean firmware build; do not restore the retired controller's files.
 
-Upgrading a hooked package to an unmodified upstream build requires rebuilding
-the matching integration. Missing hook markers cause admission to remain off
-on the next controller invocation; do not bypass this check. The ordinary proxy
-and forwarding services do not depend on successful acceleration admission.
-MosDNS and PassWall keep their upstream initial configuration: this build does
-not enable a DNS takeover chain or introduce personal resolver settings.
-
-Local tests exercise the real controller with mocked nft/netifd and the pure
-policy planner. Separate isolated checks apply the patches to the exact pinned
-fw4, SQM, PassWall, UPnP and Linux PCIe files. These are not a kernel flowtable,
-live proxy, boot or performance acceptance test. CI only builds and checks the
-firmware; no device experiments are added.
+Local regressions check package selection, absence of retired files/hooks and
+preservation of native forwarding templates. Isolated checks use exact pinned
+fw4, SQM, PassWall, UPnP and Linux PCIe sources. CI verifies prepared sources,
+the final SquashFS contents and package manifest, then publishes the firmware.
+These build checks are not a device boot or performance certification; CI does
+not perform router experiments or import private device test records.

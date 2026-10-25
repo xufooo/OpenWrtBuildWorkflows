@@ -1,4 +1,0 @@
-config settings 'main'
-	option enabled '0'
-	option lan 'lan'
-	option wan 'wan'

@@ -1,6 +1,8 @@
 """Offline regression checks for source preparation and package selection."""
 
 import importlib.util
+import gzip
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +14,58 @@ SPEC.loader.exec_module(build)
 
 
 class BuildTests(unittest.TestCase):
+    def image_fixture(self, root, retired=None, hook=None):
+        mbr = bytearray(512)
+        mbr[510:512] = b"\x55\xaa"
+        struct.pack_into("<II", mbr, 446 + 16 + 8, 1, 1)
+        header = bytearray(96)
+        header[:4] = b"hsqs"
+        struct.pack_into("<Q", header, 40, 96)
+        image = root / "test.img.gz"
+        image.write_bytes(gzip.compress(mbr + header))
+        contents = {name: "binary fixture" for name in (
+            "usr/bin/mosdns", "usr/bin/sing-box", "usr/bin/xray", "usr/bin/lucky",
+            "etc/init.d/passwall", "etc/init.d/mosdns", "etc/init.d/lucky")}
+        contents.update({
+            "etc/config/firewall": "option fullcone4 0\noption fullcone6 0\n",
+            "sbin/fw4": "stock fw4",
+            "usr/share/firewall4/templates/ruleset.uc": "flowtable ft {}\nflow offload @ft;",
+            "usr/share/passwall/nftables.sh": "stock PassWall",
+            "etc/init.d/sqm": "stock SQM",
+            "etc/init.d/miniupnpd": "upnpd_write_bool ext_allow_private_ipv4 0",
+            "usr/share/ucode/fw4.uc": "function nft_try_brcmfullcone() {}",
+            "www/luci-static/resources/view/firewall/zones.js": "var option = 'fullcone4';",
+        })
+        if retired:
+            contents[retired] = "retired fixture"
+        if hook:
+            contents[hook] += "\n# r4s-accel lifecycle v1"
+
+        def unsquashfs(*args, **kwargs):
+            self.assertEqual(args[0], "unsquashfs")
+            if args[1] == "-lln":
+                return "\n".join("squashfs-root/" + name for name in contents)
+            self.assertEqual(args[1], "-cat")
+            return contents[args[-1]]
+
+        return image, unsquashfs
+
+    def test_image_accepts_native_forwarding_without_retired_component(self):
+        with tempfile.TemporaryDirectory() as temp:
+            image, reader = self.image_fixture(Path(temp))
+            with patch.object(build, "run", side_effect=reader):
+                build.verify_image(image)
+
+    def test_image_rejects_retired_files_and_hooks(self):
+        for retired, hook in (("usr/libexec/r4s-accel", None),
+                              ("etc/config/r4s_accel", None),
+                              (None, "usr/share/passwall/nftables.sh"),
+                              (None, "etc/init.d/sqm"), (None, "sbin/fw4")):
+            with self.subTest(retired=retired, hook=hook), tempfile.TemporaryDirectory() as temp:
+                image, reader = self.image_fixture(Path(temp), retired, hook)
+                with patch.object(build, "run", side_effect=reader), self.assertRaisesRegex(SystemExit, "Retired"):
+                    build.verify_image(image)
+
     def integration_fixture(self, tree):
         fixtures = {
             "feeds/packages/net/miniupnpd/files/miniupnpd.init": "\t\tupnpd_write_bool secure_mode 1\n",
@@ -131,7 +185,13 @@ class BuildTests(unittest.TestCase):
             pcie.write_text("rockchip_pcie_phy_reset(rk_phy);\n")
             cli = root / "sbin/fw4"
             cli.parent.mkdir(parents=True)
-            cli.write_text("# r4s-accel lifecycle v1\n")
+            cli.write_text("stock fw4\n")
+            template = root / "usr/share/firewall4/templates/ruleset.uc"
+            template.parent.mkdir(parents=True)
+            template.write_text("flowtable ft {}\nflow offload @ft;\n")
+            sqm = tree / "build_dir/target-aarch64/sqm-scripts-2026/platform/openwrt/sqm-init"
+            sqm.parent.mkdir(parents=True)
+            sqm.write_text("stock sqm init\n")
             build.check_prepared(tree)
             fw4.write_text("stock fw4\n")
             with self.assertRaisesRegex(SystemExit, "Prepared firewall4"):
@@ -202,15 +262,47 @@ class BuildTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             tree = Path(temp)
             self.integration_fixture(tree)
+            pw_path = tree / "package/r4s-extras/passwall/luci-app-passwall/root/usr/share/passwall/nftables.sh"
+            original = pw_path.read_bytes()
             build.prepare_integrations(tree)
-            pw = (tree / "package/r4s-extras/passwall/luci-app-passwall/root/usr/share/passwall/nftables.sh").read_text()
-            self.assertEqual(pw.count("suspend passwall"), 2)
-            self.assertEqual(pw.count("resume passwall"), 2)
-            self.assertNotIn("mark set", pw)
-            config = (tree / "package/r4s-accel/files/etc/config/r4s_accel").read_text()
-            self.assertIn("option enabled '0'", config)
-            self.assertNotIn("list hosts", config)
+            self.assertEqual(pw_path.read_bytes(), original)
+            self.assertFalse((tree / "package/r4s-accel").exists())
+            self.assertFalse((tree / "package/network/config/firewall4/patches/998-r4s-lifecycle.patch").exists())
+            self.assertFalse((tree / "feeds/packages/net/sqm-scripts/patches/950-r4s-lifecycle.patch").exists())
             self.assertIn("ext_allow_private_ipv4 0", (tree / "feeds/packages/net/miniupnpd/files/miniupnpd.init").read_text())
+
+    def test_native_forwarding_contract_rejects_retired_hooks(self):
+        stock = ["stock fw4", "flowtable ft {}\nflow offload @ft;", "stock PassWall", "stock SQM"]
+        build.check_native_forwarding(*stock)
+        for index in (0, 2, 3):
+            source = stock.copy()
+            source[index] += "\n# r4s-accel lifecycle v1"
+            with self.subTest(index=index), self.assertRaisesRegex(SystemExit, "Retired"):
+                build.check_native_forwarding(*source)
+        with self.assertRaisesRegex(SystemExit, "Native firewall4"):
+            build.check_native_forwarding("stock", "no flowtable", "stock", "stock")
+
+    def test_retired_package_selection_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            tree = Path(temp)
+            self.make_config(tree)
+            with (tree / ".config").open("a") as config:
+                config.write("CONFIG_PACKAGE_r4s-accel=y\n")
+            with self.assertRaisesRegex(SystemExit, "forbidden"):
+                build.check_config(tree)
+
+    def test_stale_integration_files_are_rejected(self):
+        for relative in ("package/r4s-accel",
+                         "package/network/config/firewall4/patches/998-r4s-lifecycle.patch",
+                         "feeds/packages/net/sqm-scripts/patches/950-r4s-lifecycle.patch"):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as temp:
+                tree = Path(temp)
+                self.make_config(tree)
+                stale = tree / relative
+                stale.parent.mkdir(parents=True, exist_ok=True)
+                stale.touch()
+                with self.assertRaisesRegex(SystemExit, "Retired"):
+                    build.check_config(tree)
 
     def test_missing_theme_still_fails(self):
         with tempfile.TemporaryDirectory() as temp:

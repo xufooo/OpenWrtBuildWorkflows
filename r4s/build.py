@@ -20,7 +20,7 @@ REQUIRED = (
     "luci-app-lucky", "lucky", "luci-app-sqm", "luci-app-nlbwmon",
     "luci-app-upnp", "luci-app-wol", "luci-app-ttyd", "luci-app-filemanager",
     "htop", "ethtool", "tcpdump", "iperf3", "curl", "bind-dig",
-    "kmod-nf-nat", "kmod-nft-nat", "kmod-nft-offload", "r4s-accel", "conntrack",
+    "kmod-nf-nat", "kmod-nft-nat", "kmod-nft-offload", "conntrack",
 )
 
 
@@ -101,6 +101,14 @@ def check_fullcone_defaults(firewall):
             raise SystemExit(f"FullCone must be disabled in initial firewall config: {option}")
 
 
+def check_native_forwarding(cli, ruleset, passwall, sqm):
+    for name, source in (("firewall4", cli), ("PassWall", passwall), ("SQM", sqm)):
+        if "r4s-accel" in source:
+            raise SystemExit(f"Retired selective acceleration hook remains in {name}")
+    if "flow offload @ft" not in ruleset or "flowtable ft" not in ruleset:
+        raise SystemExit("Native firewall4 flowtable forwarding is missing")
+
+
 def check_prepared(tree):
     check_fullcone(tree)
     kernels = list(tree.glob("build_dir/target-*/linux-rockchip_armv8/linux-*/net/netfilter/nf_nat_masquerade.c"))
@@ -114,9 +122,16 @@ def check_prepared(tree):
     if "rockchip_pcie_phy_reset(rk_phy);" not in pcie.read_text():
         raise SystemExit("Prepared kernel lacks PCIe probe reset")
     fw4_cli = firewalls[0].parents[3] / "sbin/fw4"
-    if "r4s-accel lifecycle v1" not in fw4_cli.read_text():
-        raise SystemExit("Prepared firewall4 lacks admission lifecycle hooks")
-    print("Prepared FullCone, PCIe and admission hooks passed (not a runtime network test)")
+    sqm = list(tree.glob("build_dir/target-*/sqm-scripts-*/platform/openwrt/sqm-init"))
+    if len(sqm) != 1:
+        raise SystemExit("Prepared stock SQM init script missing or ambiguous")
+    check_native_forwarding(
+        fw4_cli.read_text(),
+        (firewalls[0].parents[3] / "usr/share/firewall4/templates/ruleset.uc").read_text(),
+        (tree / "package/r4s-extras/passwall/luci-app-passwall/root/usr/share/passwall/nftables.sh").read_text(),
+        sqm[0].read_text(),
+    )
+    print("Prepared FullCone, PCIe and native forwarding sources passed (not a runtime network test)")
 
 
 def replace_once(path, before, after):
@@ -129,8 +144,6 @@ def replace_once(path, before, after):
 def prepare_integrations(tree):
     destinations = {
         "pcie-reset.patch": "target/linux/rockchip/patches-6.12/402-1-r4s-pcie-reset.patch",
-        "firewall4-lifecycle.patch": "package/network/config/firewall4/patches/998-r4s-lifecycle.patch",
-        "sqm-lifecycle.patch": "feeds/packages/net/sqm-scripts/patches/950-r4s-lifecycle.patch",
     }
     for name, relative in destinations.items():
         destination = tree / relative
@@ -138,7 +151,6 @@ def prepare_integrations(tree):
         if destination.exists():
             raise SystemExit(f"Refusing to overwrite {destination}")
         shutil.copyfile(HERE / "patches" / name, destination)
-    shutil.copytree(HERE / "package/r4s-accel", tree / "package/r4s-accel")
     upnp = tree / "feeds/packages/net/miniupnpd/files/miniupnpd.init"
     replace_once(upnp, "\t\tupnpd_write_bool secure_mode 1\n",
                  "\t\tupnpd_write_bool secure_mode 1\n\t\tupnpd_write_bool ext_allow_private_ipv4 0\n")
@@ -146,14 +158,6 @@ def prepare_integrations(tree):
     anchor = "\t\to = s.taboption('advanced', form.Flag, 'secure_mode', _('Enable secure mode'),"
     replace_once(ui, anchor, "\t\to = s.taboption('advanced', form.Flag, 'ext_allow_private_ipv4', _('Allow private IPv4 WAN'));\n"
                  "\t\to.default = '0';\n\t\to.rmempty = false;\n\n" + anchor)
-    pw = tree / "package/r4s-extras/passwall/luci-app-passwall/root/usr/share/passwall/nftables.sh"
-    for action in ("start", "stop"):
-        before = f"{action})\n\t{action}\n\t;;"
-        after = (f"{action})\n\t# r4s-accel lifecycle v1\n"
-                 "\t[ ! -x /usr/libexec/r4s-accel ] || /usr/libexec/r4s-accel suspend passwall || exit 1\n"
-                 f"\t{action}\n\tresult=$?\n\t[ \"$result\" = 0 ] || exit \"$result\"\n"
-                 "\t[ ! -x /usr/libexec/r4s-accel ] || /usr/libexec/r4s-accel resume passwall\n\t;;")
-        replace_once(pw, before, after)
 
 
 def prepare(tree):
@@ -224,7 +228,7 @@ def check_config(tree):
     if 'CONFIG_TARGET_OPTIMIZATION="-O2 -pipe -mcpu=generic"' not in config:
         missing.append("O2 with unchanged generic AArch64 ISA")
     forbidden = [line for line in config if re.match(
-        r"CONFIG_PACKAGE_(dockerd|luci-app-dockerman|luci-app-openclash|luci-app-homeproxy|luci-app-ssr-plus)=y$", line)]
+        r"CONFIG_PACKAGE_(dockerd|luci-app-dockerman|luci-app-openclash|luci-app-homeproxy|luci-app-ssr-plus|r4s-accel)=y$", line)]
     if missing or forbidden:
         raise SystemExit(f"Missing selections: {missing}; forbidden selections: {forbidden}")
     if (tree / "files").exists():
@@ -232,11 +236,14 @@ def check_config(tree):
     check_fullcone(tree)
     for name, relative in (
         ("pcie-reset.patch", "target/linux/rockchip/patches-6.12/402-1-r4s-pcie-reset.patch"),
-        ("firewall4-lifecycle.patch", "package/network/config/firewall4/patches/998-r4s-lifecycle.patch"),
-        ("sqm-lifecycle.patch", "feeds/packages/net/sqm-scripts/patches/950-r4s-lifecycle.patch"),
     ):
         if (tree / relative).read_bytes() != (HERE / "patches" / name).read_bytes():
             raise SystemExit(f"Integration patch missing or changed: {name}")
+    for relative in ("package/r4s-accel",
+                     "package/network/config/firewall4/patches/998-r4s-lifecycle.patch",
+                     "feeds/packages/net/sqm-scripts/patches/950-r4s-lifecycle.patch"):
+        if (tree / relative).exists():
+            raise SystemExit(f"Retired selective acceleration integration remains: {relative}")
     print("R4S target, required packages and stock configuration checks passed")
 
 
@@ -270,18 +277,17 @@ def verify_image(image):
             listing = set(run("unsquashfs", "-lln", str(squashfs), capture=True).splitlines())
             paths = {line.split()[-1] for line in listing if line.split()}
             for name in ("usr/bin/mosdns", "usr/bin/sing-box", "usr/bin/xray", "usr/bin/lucky",
-                         "etc/init.d/passwall", "etc/init.d/mosdns", "etc/init.d/lucky",
-                         "usr/libexec/r4s-accel", "usr/share/r4s-accel/policy.lua"):
+                         "etc/init.d/passwall", "etc/init.d/mosdns", "etc/init.d/lucky"):
                 if f"squashfs-root/{name}" not in paths:
                     raise SystemExit(f"Required file missing from firmware: {name}")
             firewall = run("unsquashfs", "-cat", str(squashfs), "etc/config/firewall", capture=True)
             check_fullcone_defaults(firewall)
-            for path in ("sbin/fw4", "usr/share/passwall/nftables.sh", "etc/init.d/sqm"):
-                if "r4s-accel lifecycle v1" not in run("unsquashfs", "-cat", str(squashfs), path, capture=True):
-                    raise SystemExit(f"Admission lifecycle hook missing from firmware: {path}")
-            accel = run("unsquashfs", "-cat", str(squashfs), "etc/config/r4s_accel", capture=True)
-            if "option enabled '0'" not in accel or "list hosts" in accel:
-                raise SystemExit("Selective acceleration must start disabled with no host configuration")
+            retired = {path for path in paths if "r4s-accel" in path or "r4s_accel" in path}
+            if retired:
+                raise SystemExit(f"Retired selective acceleration files remain in firmware: {sorted(retired)}")
+            check_native_forwarding(*(run("unsquashfs", "-cat", str(squashfs), path, capture=True)
+                                      for path in ("sbin/fw4", "usr/share/firewall4/templates/ruleset.uc",
+                                                   "usr/share/passwall/nftables.sh", "etc/init.d/sqm")))
             upnp = run("unsquashfs", "-cat", str(squashfs), "etc/init.d/miniupnpd", capture=True)
             if "upnpd_write_bool ext_allow_private_ipv4 0" not in upnp:
                 raise SystemExit("UPnP private WAN option missing")
@@ -310,6 +316,8 @@ def collect(tree, output):
     missing = set(REQUIRED) - packages
     if missing:
         raise SystemExit(f"Required packages missing from image manifest: {sorted(missing)}")
+    if "r4s-accel" in packages:
+        raise SystemExit("Retired selective acceleration package remains in image manifest")
     output.mkdir(parents=True)
     for file in target.iterdir():
         if file.is_file():

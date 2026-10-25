@@ -38,7 +38,6 @@ jobs:
         run: |
           python3 -B -m unittest discover -s r4s -p 'test_*.py' -v
           node r4s/test_fullcone_ui.cjs
-          lua5.1 r4s/test_policy.lua r4s
       - name: Prepare pinned sources and initial configuration
         run: python3 r4s/build.py prepare "$RUNNER_TEMP/openwrt"
       - name: Configure and verify package selection

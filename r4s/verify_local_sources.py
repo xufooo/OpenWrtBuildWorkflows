@@ -25,10 +25,12 @@ if __name__ == "__main__":
         tree = Path(temp)
         fwroot = tree / "fw4"
         export(fw4, "b6e5157527d361f99ad52eaa6da273cb0f2dfd59", "root/sbin/fw4", fwroot)
-        subprocess.run(["git", "apply", str(HERE / "patches/firewall4-lifecycle.patch")], cwd=fwroot, check=True)
+        fwcli = (fwroot / "root/sbin/fw4").read_bytes()
+        template = export(fw4, "b6e5157527d361f99ad52eaa6da273cb0f2dfd59",
+                          "root/usr/share/firewall4/templates/ruleset.uc", fwroot)
         sqmroot = tree / "sqm"
         export(sqm, "20ba92639546075d8e39346dcb88a3cdfe8ee903", "platform/openwrt/sqm-init", sqmroot)
-        subprocess.run(["git", "apply", str(HERE / "patches/sqm-lifecycle.patch")], cwd=sqmroot, check=True)
+        sqminit = (sqmroot / "platform/openwrt/sqm-init").read_bytes()
         kernel = tree / "kernel"
         dest = kernel / "drivers/phy/rockchip/phy-rockchip-pcie.c"
         dest.parent.mkdir(parents=True)
@@ -44,8 +46,13 @@ if __name__ == "__main__":
         pw = export(passwall, build.LOCK["extras"]["passwall"]["commit"],
                     "luci-app-passwall/root/usr/share/passwall/nftables.sh", tree,
                     "package/r4s-extras/passwall/luci-app-passwall/root/usr/share/passwall/nftables.sh")
+        pw_source = pw.read_bytes()
         build.prepare_integrations(tree)
+        assert pw.read_bytes() == pw_source
+        assert (fwroot / "root/sbin/fw4").read_bytes() == fwcli
+        assert (sqmroot / "platform/openwrt/sqm-init").read_bytes() == sqminit
+        build.check_native_forwarding(fwcli.decode(), template.read_text(), pw_source.decode(), sqminit.decode())
         for path in (fwroot / "root/sbin/fw4", sqmroot / "platform/openwrt/sqm-init", pw):
             subprocess.run(["bash", "-n", str(path)], check=True)
         assert "rockchip_pcie_phy_reset(rk_phy);" in dest.read_text()
-        print("Pinned fw4, SQM, PassWall, UPnP and PCIe patch application passed")
+        print("Pinned native fw4/SQM/PassWall preserved; UPnP and PCIe integrations passed")
