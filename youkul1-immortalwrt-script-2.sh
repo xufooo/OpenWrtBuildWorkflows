@@ -78,7 +78,9 @@ config homeproxy 'routing'
 config homeproxy 'dns'
 	option default_strategy 'prefer_ipv4'
 	option default_server 'default-dns'
-	option disable_cache '1'
+	# dnsmasq 的缓存和 sing-box 的缓存是两个进程里两份独立的缓存, 互不读取。
+	# 关掉 sing-box 的缓存, 每次解析都要重新跟 DoH 上游握手, 而该握手走节点。
+	option disable_cache '0'
 	option disable_cache_expire '0'
 
 # ---------------------------------------------------------------------------
