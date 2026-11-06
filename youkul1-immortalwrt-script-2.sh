@@ -578,12 +578,16 @@ config routing_rule
 	option action 'route'
 	option outbound 'proxy_out'
 
-# 20 兜底直连 —— 未匹配的多为国内长尾
+# 20 兜底代理 —— 未匹配的一律走节点。
+# 语义与 PassWall 的 chnroute、mihomo 的 "GEOIP,CN,DIRECT + MATCH,proxy"、
+# HomeProxy 的 bypass_mainland_china 一致: 大陆 IP/域名直连 (白名单),
+# 其余全部代理。写成直连会让 pypi.org 这类不在任何名单里的境外站点
+# 直连被重置。
 config routing_rule
-	option label '20 Direct Default'
+	option label '20 Proxy Default'
 	option enabled '1'
 	option action 'route'
-	option outbound 'direct-out'
+	option outbound 'proxy_out'
 
 # ============================================================================
 # 添加节点后必做
