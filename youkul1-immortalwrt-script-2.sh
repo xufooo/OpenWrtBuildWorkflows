@@ -1457,7 +1457,17 @@ restore_chinadns_dnsmasq() {
 \t_section=$(uci -q -c "$HP_DIR" get dnsmasq_backup.original.section)
 \tif [ -n "$_section" ]; then
 \t\t# Do not apply an old instance's settings to another dnsmasq instance.
-\t\t[ "$(uci -q get "dhcp.$_section")" = dnsmasq ] || return 1
+\t\t# The stored name can go stale when the dnsmasq section is renamed or
+\t\t# converted between named and anonymous form. Fall back to the
+\t\t# instance that currently exists instead of refusing to start.
+\t\tif [ "$(uci -q get "dhcp.$_section")" != dnsmasq ]; then
+\t\t\t_section=""
+\t\t\tfor _s in $(uci show dhcp 2>/dev/null | grep '=dnsmasq' | cut -d= -f1 | cut -d. -f2); do
+\t\t\t\t[ -n "$_section" ] && break
+\t\t\t\t_section="$_s"
+\t\t\tdone
+\t\t\t[ -n "$_section" ] || return 1
+\t\tfi
 \t\tfor _option in server noresolv cachesize; do
 \t\t\tuci -q delete "dhcp.$_section.$_option"
 \t\tdone
@@ -1539,3 +1549,4 @@ config.write_text(defaults)
 print('HomeProxy selected-package policy integration complete')
 PYEOF_POLICY
 echo "=== P11 done ==="
+
