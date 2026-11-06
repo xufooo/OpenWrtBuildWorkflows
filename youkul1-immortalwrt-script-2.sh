@@ -71,7 +71,6 @@ config homeproxy 'config'
 	option china_dns_server '223.5.5.5'
 
 config homeproxy 'routing'
-	option sniff_override '1'
 	option default_outbound 'nil'
 	option default_outbound_dns 'default-dns'
 
@@ -1751,6 +1750,152 @@ fi
 #
 # 上游删掉了这个选项, 但对应的行为仍然重要。接回来, 默认 0 (不替换目标),
 # 想让 sing-box 重新解析的用户可以自己改成 1。
+# ---------------------------------------------------------------------------
+
+if grep -q "sniff_override = uci.get" "$HPGEN"; then
+	echo "  | - generate_client.uc: sniff_override UCI 已接回, 跳过"
+else
+	# 1) 读 UCI 值 (infra 段, 缺省 0 = 不替换目标)
+	awk '
+	BEGIN { done = 0 }
+	{
+		if (done == 0 && $0 ~ /^const ipv6_support = uci\.get\(uciconfig, ucimain, .ipv6_support.\)/) {
+			print
+			print "const sniff_override = uci.get(uciconfig, uciinfra, \"sniff_override\") || \"0\";"
+			done = 1
+			next
+		}
+		print
+	}
+	END {
+		if (done != 1) {
+			printf "P14 could not place the sniff_override declaration\n" > "/dev/stderr"
+			exit 1
+		}
+	}' "$HPGEN" > "$HPGEN.p14tmp" && mv "$HPGEN.p14tmp" "$HPGEN"
+
+	# 2) 三处 inbound 用这个值
+	awk '
+	BEGIN { count = 0 }
+	{
+		if ($0 ~ /^\tsniff_override_destination: false$/) {
+			print "\tsniff_override_destination: (sniff_override == '"'"'1'"'"')"
+			count++
+			next
+		}
+		if ($0 ~ /^\t\tsniff_override_destination: false$/) {
+			print "\t\tsniff_override_destination: (sniff_override == '"'"'1'"'"')"
+			count++
+			next
+		}
+		print
+	}
+	END {
+		if (count != 3) {
+			printf "P14 expected 3 replacements, got %d\n", count > "/dev/stderr"
+			exit 1
+		}
+	}' "$HPGEN" > "$HPGEN.p14tmp" && mv "$HPGEN.p14tmp" "$HPGEN"
+
+	grep -q "sniff_override_destination: (sniff_override == '1')" "$HPGEN" \
+		|| { echo "P14 generator patch failed" >&2; exit 1; }
+	echo "  | - generate_client.uc: sniff_override UCI 重新接回"
+fi
+
+# 3) config 里给出默认值 (0 = 保留客户端解析出的地址)。选项属于 infra 段,
+#    生成器用 uci.get(uciconfig, uciinfra, 'sniff_override') 读它。
+if grep -q "option sniff_override" "$HPCONF"; then
+	# 已有该项, 强制改成 0
+	sed -i "s/^\(\toption sniff_override \).*/\1'0'/" "$HPCONF"
+else
+	awk '
+	BEGIN { done = 0 }
+	{
+		if (done == 0 && $0 ~ /^\toption udp_timeout /) {
+			print
+			print "\toption sniff_override '"'"'0'"'"'"
+			done = 1
+			next
+		}
+		print
+	}
+	END {
+		if (done != 1) {
+			printf "P14 config missing the infra anchor\n" > "/dev/stderr"
+			exit 1
+		}
+	}' "$HPCONF" > "$HPCONF.p14tmp" && mv "$HPCONF.p14tmp" "$HPCONF"
+fi
+grep -q "option sniff_override '0'" "$HPCONF" \
+	|| { echo "P14 config patch failed" >&2; exit 1; }
+
+echo "=== P13/P14 done ==="
+
+# ---------------------------------------------------------------------------
+# P13: sniff 不得替换目标地址 —— 解析权交给 chinadns-ng
+#
+# sing-box 1.11 起 sniff 改用 route.rules 的 action:'sniff', 上游随之把
+# inbound 里的 sniff / sniff_override_destination 配置和 sniff_override 这个
+# UCI 项一起删掉了 (migrate_config.uc 里写着 "deprecated in sb 1.11")。
+# 但 action:'sniff' 默认仍然会用 sniff 到的域名替换目标地址, 于是 sing-box
+# 要再解析一次, 而这次解析走 route.default_domain_resolver (运营商 DNS),
+# 绕过了 chinadns-ng 的分流与污染过滤, 拿到的地址可以和客户端解析出的
+# 不一致, 表现为境外站点间歇性 EOF / RST。
+#
+# 1.12 的 route action 不支持 override_destination, 但 inbound 上仍然认
+# sniff_override_destination。所以把它加回三个 inbound 并置 false: sniff
+# 到的域名只用于匹配分流规则, 连接仍用客户端 (dnsmasq -> chinadns-ng)
+# 解析出的地址。
+# ---------------------------------------------------------------------------
+
+if grep -q "sniff_override_destination" "$HPGEN"; then
+	echo "  | - generate_client.uc: sniff_override_destination 已存在, 跳过"
+else
+	awk '
+	BEGIN { count = 0 }
+	{
+		# mixed inbound 的最后一行: set_system_proxy: false (无逗号)
+		if ($0 ~ /^\tset_system_proxy: false$/) {
+			print $0 ","
+			print "\tsniff_override_destination: false"
+			count++
+			next
+		}
+		# redirect inbound 的最后一行: listen_port (无逗号)
+		if ($0 ~ /^\t\tlisten_port: int\(redirect_port\)$/) {
+			print $0 ","
+			print "\t\tsniff_override_destination: false"
+			count++
+			next
+		}
+		# tproxy inbound 的最后一行: udp_timeout (无逗号)
+		if ($0 ~ /^\t\tudp_timeout: strToTime\(udp_timeout\)$/) {
+			print $0 ","
+			print "\t\tsniff_override_destination: false"
+			count++
+			next
+		}
+		print
+	}
+	END {
+		if (count != 3) {
+			printf "P13 expected 3 inbound patches, got %d\n", count > "/dev/stderr"
+			exit 1
+		}
+	}' "$HPGEN" > "$HPGEN.p13tmp" && mv "$HPGEN.p13tmp" "$HPGEN"
+
+	grep -q "sniff_override_destination: false" "$HPGEN" \
+		|| { echo "P13 generator patch failed" >&2; exit 1; }
+	[ "$(grep -c 'sniff_override_destination: false' "$HPGEN")" = "3" ] \
+		|| { echo "P13 expected 3 sniff_override_destination entries" >&2; exit 1; }
+	echo "  | - generate_client.uc: sniff 不再替换目标地址"
+fi
+
+# ---------------------------------------------------------------------------
+# P14: sniff_override UCI 项重新接回生成器
+#
+# 上游删掉了这个选项, 但对应的行为仍然重要。接回来, 默认 0 (不替换目标),
+# 想让 sing-box 重新解析的用户可以自己改成 1。选项放在 infra 段。
 # ---------------------------------------------------------------------------
 
 if grep -q "sniff_override = uci.get" "$HPGEN"; then
