@@ -1550,3 +1550,133 @@ print('HomeProxy selected-package policy integration complete')
 PYEOF_POLICY
 echo "=== P11 done ==="
 
+# ---------------------------------------------------------------------------
+# P12: 内置规则集 (.srs) —— 出厂即有规则, 不依赖运行时下载
+#
+# sing-box 的 remote rule_set 在首次匹配时才下载, 而匹配本身又需要规则集
+# 存在。规则集为空 -> 匹配不到 -> 永远不下载, 分流规则全部失效, 流量落到
+# 兜底规则被直连并重置。构建期把 .srs 打进包并改成 type=local, 出厂即生效。
+# ---------------------------------------------------------------------------
+
+HPRS_DIR="$HPDIR/root/etc/homeproxy/ruleset"
+HPRS_LIST="private_cidr private_domain cn_domain cn_ip microsoft scholar ads gfw ai_services apple_ai netflix disney youtube spotify telegram twitter tiktok github games non_cn"
+
+mkdir -p "$HPRS_DIR"
+
+# 规则名 -> 上游路径。geoip 用 MetaCubeX, geosite 用 sing-geosite。
+srs_url() {
+	case "$1" in
+	private_cidr)  echo "MetaCubeX/meta-rules-dat@sing/geo/geoip/private.srs" ;;
+	private_domain) echo "1715173329/sing-geosite@rule-set/geosite-private.srs" ;;
+	cn_domain)     echo "MetaCubeX/meta-rules-dat@sing/geo/geosite/cn.srs" ;;
+	cn_ip)         echo "1715173329/IPCIDR-CHINA@rule-set/cn.srs" ;;
+	microsoft)     echo "1715173329/sing-geosite@rule-set/geosite-microsoft.srs" ;;
+	scholar)       echo "1715173329/sing-geosite@rule-set/geosite-category-scholar-!cn.srs" ;;
+	ads)           echo "1715173329/sing-geosite@rule-set/geosite-category-ads.srs" ;;
+	gfw)           echo "1715173329/sing-geosite@rule-set/geosite-gfw.srs" ;;
+	ai_services)   echo "1715173329/sing-geosite@rule-set/geosite-category-ai-!cn.srs" ;;
+	apple_ai)      echo "1715173329/sing-geosite@rule-set/geosite-apple-intelligence.srs" ;;
+	netflix)       echo "1715173329/sing-geosite@rule-set/geosite-netflix.srs" ;;
+	disney)        echo "1715173329/sing-geosite@rule-set/geosite-disney.srs" ;;
+	youtube)       echo "1715173329/sing-geosite@rule-set/geosite-youtube.srs" ;;
+	spotify)       echo "1715173329/sing-geosite@rule-set/geosite-spotify.srs" ;;
+	telegram)      echo "1715173329/sing-geosite@rule-set/geosite-telegram.srs" ;;
+	twitter)       echo "1715173329/sing-geosite@rule-set/geosite-twitter.srs" ;;
+	tiktok)        echo "1715173329/sing-geosite@rule-set/geosite-tiktok.srs" ;;
+	github)        echo "1715173329/sing-geosite@rule-set/geosite-github.srs" ;;
+	games)         echo "1715173329/sing-geosite@rule-set/geosite-category-games.srs" ;;
+	non_cn)        echo "1715173329/sing-geosite@rule-set/geosite-geolocation-!cn.srs" ;;
+	*)             return 1 ;;
+	esac
+}
+
+_srs_fail=0
+for _rs in $HPRS_LIST; do
+	_path=$(srs_url "$_rs") || { echo "P12 unknown rule set: $_rs" >&2; _srs_fail=1; continue; }
+	_out="$HPRS_DIR/$_rs.srs"
+	if [ ! -s "$_out" ]; then
+		# 构建环境走代理才能拿到 jsdelivr 上的文件
+		if ! wget -q -T 60 -O "$_out.tmp" "https://fastly.jsdelivr.net/gh/$_path"; then
+			echo "P12 failed to fetch $_rs from $_path" >&2
+			rm -f "$_out.tmp"
+			_srs_fail=1
+			continue
+		fi
+		if [ ! -s "$_out.tmp" ]; then
+			echo "P12 empty rule set: $_rs" >&2
+			rm -f "$_out.tmp"
+			_srs_fail=1
+			continue
+		fi
+		mv "$_out.tmp" "$_out"
+	fi
+	printf "  | - rule set: %-16s %s bytes\n" "$_rs" "$(wc -c < "$_out")"
+done
+[ "$_srs_fail" = 0 ] || { echo "P12 rule set download failed" >&2; exit 1; }
+
+# config 里把 remote 改成 local, 并指向内置文件
+awk '
+BEGIN { name = ""; count = 0 }
+{
+	if ($0 ~ /^config ruleset '\''[A-Za-z0-9_]+'\''$/) {
+		name = $0
+		sub(/^config ruleset '\''/, "", name)
+		sub(/'\''$/, "", name)
+		count++
+		print
+		next
+	}
+	if ($0 ~ /^\toption url '\''/) next
+	if ($0 ~ /^\toption type '\''remote'\''$/) {
+		print "\toption type '\''local'\''"
+		print "\toption path '\''/etc/homeproxy/ruleset/" name ".srs'\''"
+		next
+	}
+	print
+}
+END {
+	if (count != 20) {
+		printf "P12 expected 20 rule sets, got %d\n", count > "/dev/stderr"
+		exit 1
+	}
+}' "$HPCONF" > "$HPCONF.p12tmp" && mv "$HPCONF.p12tmp" "$HPCONF"
+
+# local 类型的 rule_set 不接受 download_detour / update_interval,
+# sing-box 会报 unknown field 而拒绝启动。让生成器按 type 区分。
+if ! grep -q "rs.download_detour = get_outbound" "$HPGEN"; then
+	awk '
+	BEGIN { inruleset = 0; skip = 0 }
+	{
+		if ($0 ~ /uci.foreach\(uciconfig, uciruleset/) { inruleset = 1 }
+		if (inruleset == 1 && $0 ~ /^\t\tpush\(config.route.rule_set, \{$/) {
+			print "\t\tlet rs = {"
+			print "\t\t\ttype: cfg.type,"
+			print "\t\t\ttag: '\''cfg-'\'' + cfg['\''.name'\''] + '\''-rule'\'',"
+			print "\t\t\tformat: cfg.format,"
+			print "\t\t\tpath: cfg.path,"
+			print "\t\t\turl: cfg.url"
+			print "\t\t};"
+			print "\t\t\tif (rs.type !== '\''local'\'') {"
+			print "\t\t\trs.download_detour = get_outbound(cfg.outbound);"
+			print "\t\t\trs.update_interval = cfg.update_interval;"
+			print "\t\t}"
+			print "\t\tpush(config.route.rule_set, rs);"
+			skip = 1
+			next
+		}
+		if (skip == 1) {
+			if ($0 ~ /^\t\t\}\);$/) { skip = 0; next }
+			next
+		}
+		print
+	}' "$HPGEN" > "$HPGEN.p12tmp" && mv "$HPGEN.p12tmp" "$HPGEN"
+	grep -q "rs.download_detour = get_outbound" "$HPGEN" || { echo "P12 generator patch failed" >&2; exit 1; }
+	echo "  | - generate_client.uc: local rule set 字段修正"
+fi
+
+# 校验: 每个 ruleset 段都有 local + path, 且文件都在
+for _rs in $HPRS_LIST; do
+	grep -q "option type 'local'" "$HPCONF" || { echo "P12 config missing local rule set" >&2; exit 1; }
+	[ -s "$HPRS_DIR/$_rs.srs" ] || { echo "P12 missing $_rs.srs" >&2; exit 1; }
+done
+echo "=== P12 done ==="
