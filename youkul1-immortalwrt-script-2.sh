@@ -375,27 +375,16 @@ config ruleset 'non_cn'
 # 00 节点域名 —— 占位，用户需在 LuCI 中新增到第一位
 #     说明：示例见文末，不要直接用 example.com
 
-# 01 屏蔽 SVCB/HTTPS（qtype 64/65），避免浏览器 ECH 走意外路径
-# 默认关闭：DNS 功能已收到 chinadns-ng 一层（--filter-qtype 64,65），
-# sing-box 这边不再重复做一套，两层各做一遍会互相打架。
-# 只有把 dns_routing 切回 native 时才需要打开这一条。
-config dns_rule
-	option label '01 Block SVCB HTTPS'
-	option enabled '0'
-	list query_type '64'
-	list query_type '65'
-	option action 'reject'
-
 # 02 广告拦截
 config dns_rule
-	option label '02 Ads Block'
+	option label '01 Ads Block'
 	option enabled '1'
 	list rule_set 'ads'
 	option action 'reject'
 
 # 03 GFWList 内的域名必须走境外 DNS，否则被污染
 config dns_rule
-	option label '03 GFW Domains'
+	option label '02 GFW Domains'
 	option enabled '1'
 	list rule_set 'gfw'
 	option action 'route'
@@ -403,7 +392,7 @@ config dns_rule
 
 # 04 国内域名走国内 DNS（直连，快）
 config dns_rule
-	option label '04 CN Domains'
+	option label '03 CN Domains'
 	option enabled '1'
 	list rule_set 'cn_domain'
 	option action 'route'
@@ -411,7 +400,7 @@ config dns_rule
 
 # 05 境外域名走境外 DoH（经代理，防污染）
 config dns_rule
-	option label '05 Non-CN Domains'
+	option label '04 Non-CN Domains'
 	option enabled '1'
 	list rule_set 'non_cn'
 	option action 'route'
@@ -419,7 +408,7 @@ config dns_rule
 
 # 06 兜底走境外 DNS —— 未匹配到的域名多为境外
 config dns_rule
-	option label '06 Default'
+	option label '05 Default'
 	option enabled '1'
 	option action 'route'
 	option server 'cloudflare_dns'
