@@ -376,9 +376,12 @@ config ruleset 'non_cn'
 #     说明：示例见文末，不要直接用 example.com
 
 # 01 屏蔽 SVCB/HTTPS（qtype 64/65），避免浏览器 ECH 走意外路径
+# 默认关闭：DNS 功能已收到 chinadns-ng 一层（--filter-qtype 64,65），
+# sing-box 这边不再重复做一套，两层各做一遍会互相打架。
+# 只有把 dns_routing 切回 native 时才需要打开这一条。
 config dns_rule
 	option label '01 Block SVCB HTTPS'
-	option enabled '1'
+	option enabled '0'
 	list query_type '64'
 	list query_type '65'
 	option action 'reject'
@@ -1098,7 +1101,7 @@ gen_chinadns_lists() {
 		# DNS 分流交给 chinadns-ng (可选), 参数结构同 passwall。
 		if [ "$(uci -q get homeproxy.config.routing_mode)" = "custom" ] &&
 		   [ "$(uci -q get homeproxy.config.dns_routing)" = "chinadns" ]; then
-			local _cdng_port _cdng_china _cdng_trust _cdng_nipv6 _cdng_cache _i=0
+			local _cdng_port _cdng_china _cdng_trust _cdng_nipv6 _cdng_cache _cdng_qtype _i=0
 			config_get _cdng_port "config" "dns_chinadns_port" "5353"
 			# Share HomeProxy's China DNS setting instead of a second one. The LuCI
 			# field already covers UDP/TCP/DoH/DoQ/DoT, and sing-box resolves
@@ -1107,6 +1110,12 @@ gen_chinadns_lists() {
 			config_get _cdng_trust "config" "dns_trust" "127.0.0.1#$dns_port"
 			config_get _cdng_nipv6 "config" "dns_chinadns_no_ipv6" "tag:gfw"
 			config_get _cdng_cache "config" "dns_chinadns_cache" "4096"
+			# DNS 功能全部由 chinadns-ng 承担: qtype 过滤在这里一刀切,
+			# sing-box 那边不再重复做一套 dns_rule.
+			# 默认屏蔽 SVCB(64)/HTTPS(65): Chromium 拿到 HTTPS 记录会走
+			# ECH/Alt-Svc 去连记录里的 CNAME 目标, 那些主机不在分流表内,
+			# 页面就加载不出来 (10.1 的 mosdns 用 reject 3 做同一件事).
+			config_get _cdng_qtype "config" "dns_chinadns_filter_qtype" "64,65"
 			# procd launches both instances after start_service returns.
 			# Waiting for sing-box here would delay every cold start.
 			# 先把三条规则的内容提取成名单文件, 下面的 group 判断才有内容可读
@@ -1142,6 +1151,8 @@ gen_chinadns_lists() {
 			[ -f "$HP_DIR/resources/china_list.txt" ] && _cdng_args="$_cdng_args -m $HP_DIR/resources/china_list.txt -M -a"
 			[ -f "$HP_DIR/resources/gfw_list.txt" ] && _cdng_args="$_cdng_args -g $HP_DIR/resources/gfw_list.txt"
 			[ -n "$_cdng_nipv6" ] && _cdng_args="$_cdng_args -N $_cdng_nipv6"
+			# qtype 过滤全局生效, 所有组 (含用户直连/代理组) 都管得到.
+			[ -n "$_cdng_qtype" ] && _cdng_args="$_cdng_args --filter-qtype $_cdng_qtype"
 			[ "$_cdng_cache" != "0" ] && _cdng_args="$_cdng_args --cache $_cdng_cache --cache-db /var/run/chinadns-ng.cache"
 			# shellcheck disable=SC2086
 			# 逐个 append, 不用 set_param + 未加引号的变量展开 (参数里有 -m/-g 这类
@@ -1219,8 +1230,8 @@ awk '
 
 # 5) config: 默认 native, 上游行为完全不变。
 # 默认走 chinadns-ng: 本机的特色, 首次刷机即生效, 用户可在界面改回 native。
-sed -i "s#^config homeproxy 'config'\$#config homeproxy 'config'\n\toption dns_routing 'chinadns'\n\toption dns_chinadns_port '5353'\n\toption dns_chinadns_no_ipv6 'tag:gfw'\n\toption dns_chinadns_cache '4096'#" "$HPCONF"
-for _opt in dns_routing dns_chinadns_port dns_chinadns_no_ipv6 dns_chinadns_cache; do
+sed -i "s#^config homeproxy 'config'\$#config homeproxy 'config'\n\toption dns_routing 'chinadns'\n\toption dns_chinadns_port '5353'\n\toption dns_chinadns_no_ipv6 'tag:gfw'\n\toption dns_chinadns_cache '4096'\n\toption dns_chinadns_filter_qtype '64,65'#" "$HPCONF"
+for _opt in dns_routing dns_chinadns_port dns_chinadns_no_ipv6 dns_chinadns_cache dns_chinadns_filter_qtype; do
 	grep -qE "^[[:space:]]*option $_opt " "$HPCONF" || { echo "P11 config missing: $_opt" >&2; exit 1; }
 done
 
