@@ -6,8 +6,9 @@ feeds use the exact revisions supplied by the OpenWrt release.
 
 Includes PassWall (nftables), Xray, sing-box, MosDNS, Lucky, Argon, SQM,
 nlbwmon, UPnP, WOL, ttyd, file manager and diagnostic tools. No Docker.
-All applications keep their upstream initial configuration. No device backup,
-credentials, subscriptions, network overrides or files overlay is imported.
+Applications keep their upstream initial configuration. No device backup,
+credentials, subscriptions, IP/DNS/route overrides or files overlay is imported.
+The public network-tuning defaults below are the only new runtime profile.
 
 Adds the public YAOF BCM FullCone kernel/fw4/LuCI patches, pinned to commit
 8f53c9e82281550477804102e2538486ef13838b with local SHA256 checks. FullCone
@@ -88,3 +89,50 @@ fw4, SQM, PassWall, UPnP and Linux PCIe sources. CI verifies prepared sources,
 the final SquashFS contents and package manifest, then publishes the firmware.
 These build checks are not a device boot or performance certification; CI does
 not perform router experiments or import private device test records.
+
+## R4S network tuning candidate
+
+This candidate keeps OpenWrt 25.12.6, the same kernel, drivers and official SQM
+package. It does not change CAKE parameters, select a new QoS engine, enable
+SQM or flow offloading, or embed bandwidth limits. It is not a verified fix for
+WAN throughput loss. No router operations or speed tests run from this workflow.
+
+The separate `r4s-net-tune` package is restricted to R4S board identities;
+feature/ring changes target physical ports eth0/eth1 only. Packet steering
+follows the native global LuCI policy. It references YAOF revision c7540bb and the public
+OpenWrt-Add tuning scripts at aefd16b; it does not install the author's broad
+default-settings package. Reference commits and installed-file hashes are
+recorded in `network-tuning.buildinfo`.
+
+- Prefer native all-CPU packet steering and 128 flow entries in the initial
+  profile. An explicitly disabled steering setting is respected. Subsequent
+  LuCI changes remain authoritative; no fixed IRQ or RPS mask is installed.
+  This public-default migration runs once, is recorded in the package's UCI
+  config, and defers rather than committing pre-existing pending UCI changes.
+  When flow steering is configured, also size its global RFS socket table to
+  cover the physical RX queues. Per-queue entries alone do not activate RFS
+  while `rps_sock_flow_entries` is zero. This table is bounded and reversible;
+  disabling steering/flow entries also relinquishes this package's RFS table.
+- Reapply the native configured steering after relevant network/SQM events,
+  using a quiet interval rather than rewriting the upstream service scripts.
+- Raise socket-buffer ceilings without lowering existing TCP minimum/default
+  values, and raise the network backlog limit. Larger ceilings are not memory
+  reservations and are not evidence of improved throughput.
+- Apply supported RX-checksum/GRO settings, respecting explicit device GRO
+  configuration. Unsupported/fixed features are not forced.
+- Ring resizing is limited to early boot while the physical interface is down.
+  No live ring resize, adaptive-coalescing change or network restart is used.
+
+The service records only a small allowlist of original numeric/feature values
+under its root-only runtime directory and restores its runtime changes on stop.
+Ring restoration is not attempted on a live interface; an early-boot ring
+change may require a reboot to return to the driver's defaults. Native UCI
+steering settings remain visible and are not secretly reverted by the service.
+Live package installation/upgrade does not automatically start the tuning
+service; start it explicitly or reboot after reviewing the profile.
+
+Excluded from this profile: CPU overclock/governor changes, mitigation changes,
+proxy ARP, DNS, IPv6, ZRAM, author-specific proxy rules and unproven CAKE/IFB
+kernel patches. FriendlyWrt's 6.6 kernel is a comparison source, not a kernel
+downgrade in this build. Final boot, throughput and loaded-latency acceptance
+remain separate from source checks and successful compilation.

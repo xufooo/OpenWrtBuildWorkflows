@@ -14,13 +14,19 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 LOCK = json.loads((HERE / "sources.lock.json").read_text())
+NET_TUNE = HERE / "packages/r4s-net-tune"
+NET_TUNE_FILES = (
+    "etc/config/r4s_net_tune", "etc/init.d/r4s-net-tune",
+    "usr/libexec/r4s-net-tune", "etc/hotplug.d/net/90-r4s-net-tune",
+    "etc/uci-defaults/90-r4s-net-tune",
+)
 REQUIRED = (
     "luci", "luci-ssl", "luci-theme-argon", "dnsmasq-full", "firewall4",
     "luci-app-passwall", "sing-box", "xray-core", "luci-app-mosdns", "mosdns",
     "luci-app-lucky", "lucky", "luci-app-sqm", "luci-app-nlbwmon",
     "luci-app-upnp", "luci-app-wol", "luci-app-ttyd", "luci-app-filemanager",
     "htop", "ethtool", "tcpdump", "iperf3", "curl", "bind-dig",
-    "kmod-nf-nat", "kmod-nft-nat", "kmod-nft-offload", "conntrack",
+    "kmod-nf-nat", "kmod-nft-nat", "kmod-nft-offload", "conntrack", "r4s-net-tune", "flock",
 )
 
 
@@ -141,6 +147,23 @@ def replace_once(path, before, after):
     path.write_text(text.replace(before, after))
 
 
+def prepare_net_tune(tree):
+    destination = tree / "package/r4s-net-tune"
+    if destination.exists():
+        raise SystemExit("Refusing to overwrite the R4S network tuning package")
+    shutil.copytree(NET_TUNE, destination,
+                    ignore=shutil.ignore_patterns(".DS_Store", "__pycache__", "*.pyc"))
+
+
+def check_net_tune(tree):
+    package = tree / "package/r4s-net-tune"
+    for relative in ("Makefile", *("files/" + name for name in NET_TUNE_FILES)):
+        expected = NET_TUNE / relative
+        actual = package / relative
+        if not actual.is_file() or actual.is_symlink() or actual.read_bytes() != expected.read_bytes():
+            raise SystemExit(f"R4S network tuning source missing or changed: {relative}")
+
+
 def prepare_integrations(tree):
     destinations = {
         "pcie-reset.patch": "target/linux/rockchip/patches-6.12/402-1-r4s-pcie-reset.patch",
@@ -178,6 +201,7 @@ def prepare(tree):
         directory = "luci-theme-argon" if name == "argon" else name
         checkout(spec, extras / directory)
     prepare_integrations(tree)
+    prepare_net_tune(tree)
     # Xray 26.10.21 requires Go 1.27; select the pinned official host variant.
     xray = extras / "passwall_packages/xray-core/Makefile"
     recipe = xray.read_text()
@@ -234,6 +258,7 @@ def check_config(tree):
     if (tree / "files").exists():
         raise SystemExit("Unexpected files overlay: no personal configuration may enter this build")
     check_fullcone(tree)
+    check_net_tune(tree)
     for name, relative in (
         ("pcie-reset.patch", "target/linux/rockchip/patches-6.12/402-1-r4s-pcie-reset.patch"),
     ):
@@ -275,7 +300,13 @@ def verify_image(image):
                     output.write(chunk)
                     remaining -= len(chunk)
             listing = set(run("unsquashfs", "-lln", str(squashfs), capture=True).splitlines())
-            paths = {line.split()[-1] for line in listing if line.split()}
+            entries = {}
+            for line in listing:
+                fields = line.split()
+                name = next((word for word in fields if word.startswith("squashfs-root/")), None)
+                if name:
+                    entries[name] = fields
+            paths = set(entries)
             for name in ("usr/bin/mosdns", "usr/bin/sing-box", "usr/bin/xray", "usr/bin/lucky",
                          "etc/init.d/passwall", "etc/init.d/mosdns", "etc/init.d/lucky"):
                 if f"squashfs-root/{name}" not in paths:
@@ -285,6 +316,19 @@ def verify_image(image):
             retired = {path for path in paths if "r4s-accel" in path or "r4s_accel" in path}
             if retired:
                 raise SystemExit(f"Retired selective acceleration files remain in firmware: {sorted(retired)}")
+            for name in NET_TUNE_FILES:
+                if f"squashfs-root/{name}" not in paths:
+                    raise SystemExit(f"R4S network tuning file missing from firmware: {name}")
+                actual = run("unsquashfs", "-cat", str(squashfs), name, capture=True)
+                if actual != (NET_TUNE / "files" / name).read_text():
+                    raise SystemExit(f"R4S network tuning file changed in firmware: {name}")
+                if name != "etc/config/r4s_net_tune" and entries[f"squashfs-root/{name}"][0][3:4] != "x":
+                    raise SystemExit(f"R4S network tuning script is not executable: {name}")
+            if "squashfs-root/etc/rc.d/S19r4s-net-tune" not in paths:
+                raise SystemExit("R4S network tuning boot service is not enabled in firmware")
+            boot = entries["squashfs-root/etc/rc.d/S19r4s-net-tune"]
+            if not boot[0].startswith("l") or boot[-2:] != ["->", "../init.d/r4s-net-tune"]:
+                raise SystemExit("R4S network tuning boot service link is invalid")
             check_native_forwarding(*(run("unsquashfs", "-cat", str(squashfs), path, capture=True)
                                       for path in ("sbin/fw4", "usr/share/firewall4/templates/ruleset.uc",
                                                    "usr/share/passwall/nftables.sh", "etc/init.d/sqm")))
@@ -325,6 +369,13 @@ def collect(tree, output):
     for name in ("sources.lock.buildinfo", "feeds.revisions.buildinfo", "config.seed.buildinfo"):
         shutil.copy2(tree / name, output / name)
     shutil.copy2(tree / ".config", output / "full.config.buildinfo")
+    tuning_info = {
+        "references": LOCK["network_tuning"]["references"],
+        "files": {name: hashlib.sha256((NET_TUNE / "files" / name).read_bytes()).hexdigest()
+                  for name in NET_TUNE_FILES},
+        "validation_scope": "source, package selection and image contents; not device throughput",
+    }
+    (output / "network-tuning.buildinfo").write_text(json.dumps(tuning_info, indent=2) + "\n")
     if (tree / "public-key.pem").exists():
         shutil.copy2(tree / "public-key.pem", output / "public-key.pem")
     run("tar", "--zstd", "-cf", str(output / "r4s-apk-packages.tar.zst"),

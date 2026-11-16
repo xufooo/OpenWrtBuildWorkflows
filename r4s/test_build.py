@@ -36,6 +36,9 @@ class BuildTests(unittest.TestCase):
             "usr/share/ucode/fw4.uc": "function nft_try_brcmfullcone() {}",
             "www/luci-static/resources/view/firewall/zones.js": "var option = 'fullcone4';",
         })
+        contents.update({name: (build.NET_TUNE / "files" / name).read_text()
+                         for name in build.NET_TUNE_FILES})
+        contents["etc/rc.d/S19r4s-net-tune"] = "../init.d/r4s-net-tune"
         if retired:
             contents[retired] = "retired fixture"
         if hook:
@@ -44,7 +47,10 @@ class BuildTests(unittest.TestCase):
         def unsquashfs(*args, **kwargs):
             self.assertEqual(args[0], "unsquashfs")
             if args[1] == "-lln":
-                return "\n".join("squashfs-root/" + name for name in contents)
+                return "\n".join(
+                    ("lrwxrwxrwx squashfs-root/" + name + " -> ../init.d/r4s-net-tune")
+                    if name == "etc/rc.d/S19r4s-net-tune" else "-rwxr-xr-x squashfs-root/" + name
+                    for name in contents)
             self.assertEqual(args[1], "-cat")
             return contents[args[-1]]
 
@@ -146,6 +152,7 @@ class BuildTests(unittest.TestCase):
             build.prepare_fullcone(tree)
         self.integration_fixture(tree)
         build.prepare_integrations(tree)
+        build.prepare_net_tune(tree)
 
     def test_fullcone_patch_tampering_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -320,6 +327,46 @@ class BuildTests(unittest.TestCase):
             (tree / "files").mkdir()
             with self.assertRaisesRegex(SystemExit, "personal configuration"):
                 build.check_config(tree)
+
+    def test_net_tune_source_tampering_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            tree = Path(temp)
+            self.make_config(tree)
+            (tree / "package/r4s-net-tune/files/etc/config/r4s_net_tune").write_text("changed\n")
+            with self.assertRaisesRegex(SystemExit, "network tuning source"):
+                build.check_config(tree)
+
+    def test_image_rejects_net_tune_payload_change(self):
+        with tempfile.TemporaryDirectory() as temp:
+            image, reader = self.image_fixture(Path(temp))
+
+            def changed(*args, **kwargs):
+                if args[-1] == "usr/libexec/r4s-net-tune":
+                    return "changed\n"
+                return reader(*args, **kwargs)
+
+            with patch.object(build, "run", side_effect=changed), self.assertRaisesRegex(SystemExit, "changed in firmware"):
+                build.verify_image(image)
+
+    def test_image_rejects_disabled_or_invalid_net_tune_boot(self):
+        for change, message in (("missing", "not enabled"), ("wrong_target", "link is invalid"),
+                                ("not_executable", "not executable")):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as temp:
+                image, reader = self.image_fixture(Path(temp))
+
+                def altered(*args, **kwargs):
+                    result = reader(*args, **kwargs)
+                    if args[1] != "-lln":
+                        return result
+                    if change == "missing":
+                        return "\n".join(line for line in result.splitlines() if "S19r4s-net-tune" not in line)
+                    if change == "wrong_target":
+                        return result.replace("-> ../init.d/r4s-net-tune", "-> ../init.d/other")
+                    return result.replace("-rwxr-xr-x squashfs-root/usr/libexec/r4s-net-tune",
+                                          "-rw-r--r-- squashfs-root/usr/libexec/r4s-net-tune")
+
+                with patch.object(build, "run", side_effect=altered), self.assertRaisesRegex(SystemExit, message):
+                    build.verify_image(image)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,308 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# BusyBox ash supports local; numeric tuples are intentionally split with -f.
+# shellcheck disable=SC3043,SC2086,SC2015
+# Original public implementation; no YAOF code or private configuration copied.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+umask 077
+set -f
+STATE=/var/run/r4s-net-tune
+BUFF_KEYS='net.core.rmem_max net.core.wmem_max net.ipv4.tcp_rmem net.ipv4.tcp_wmem net.core.netdev_max_backlog'
+KEYS="$BUFF_KEYS net.core.rps_sock_flow_entries"
+
+board_ok() {
+	case "$(cat /tmp/sysinfo/board_name 2>/dev/null)" in
+		friendlyarm,nanopi-r4s|friendlyarm,nanopi-r4s-enterprise|friendlyelec,nanopi-r4s) return 0 ;;
+	esac
+	return 1
+}
+enabled() { [ "$(uci -q get r4s_net_tune.main.enabled)" = 1 ]; }
+uint() {
+	case "$1" in ''|*[!0-9]*) return 1 ;; esac
+	case "$1" in 0|[1-9]*) ;; *) return 1 ;; esac
+	[ "${#1}" -le 10 ] && [ "$1" -le 2147483647 ]
+}
+values_ok() {
+	local n
+	[ "$#" = 1 ] || [ "$#" = 3 ] || return 1
+	for n in "$@"; do uint "$n" || return 1; done
+}
+log() { logger -t r4s-net-tune "$*"; }
+locked() { ( trap '' TERM INT; exec 9>"$STATE/lock"; flock -x 9 || exit 1; "$@" ); }
+
+# Preserve the first baseline only while the last own write still owns the value.
+remember() {
+	local last
+	if [ -f "$STATE/$1.last" ]; then
+		last=$(cat "$STATE/$1.last") || return 1
+		if [ "$last" = "$2" ]; then [ -f "$STATE/$1.base" ]; return $?; fi
+	fi
+	printf '%s\n' "$2" >"$STATE/$1.base" || return 1
+	rm -f "$STATE/$1.last"
+}
+written() { printf '%s\n' "$2" >"$STATE/$1.last"; }
+forget() { rm -f "$STATE/$1.base" "$STATE/$1.last"; }
+sys_read() { cat "/proc/sys/$(printf '%s' "$1" | tr . /)" 2>/dev/null; }
+sys_write() { printf '%s\n' "$2" >"/proc/sys/$(printf '%s' "$1" | tr . /)"; }
+normalize() { printf '%s\n' "$*" | awk '{$1=$1; print}'; }
+
+tune_sys() {
+	local key cur want cap mem actual
+	mem=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+	uint "$mem" || return 1
+	cap=33554432
+	[ "$mem" -lt 1048576 ] || cap=67108864
+	for key in $BUFF_KEYS; do
+		cur=$(normalize "$(sys_read "$key")")
+		values_ok $cur || continue
+		set -- $cur
+		case "$key" in
+			net.ipv4.tcp_*) [ "$#" = 3 ] || continue; want="$1 $2 $cap"; [ "$3" -lt "$cap" ] || continue ;;
+			*) [ "$#" = 1 ] || continue; want=$cap
+				[ "$key" != net.core.netdev_max_backlog ] || want=16384
+				[ "$1" -lt "$want" ] || continue ;;
+		esac
+		remember "$key" "$cur" || continue
+		if sys_write "$key" "$want"; then written "$key" "$want"; else log "sysctl write failed: $key"; fi
+		actual=$(sys_read "$key") || { log "sysctl readback failed: $key"; continue; }
+		actual=$(normalize "$actual")
+		values_ok $actual || continue
+		[ "$actual" = "$cur" ] || written "$key" "$actual"
+		[ "$actual" = "$want" ] || log "sysctl readback differs: $key"
+	done
+}
+
+# Native steering owns all queue masks/counts; only provision its global RFS table.
+tune_rfs() (
+	local mode flows path dev n total=0 cur actual expected=1 key=net.core.rps_sock_flow_entries
+	mode=$(uci -q get 'network.@globals[0].packet_steering')
+	flows=$(uci -q get 'network.@globals[0].steering_flows')
+	if ! uint "$mode" || [ "$mode" = 0 ] || ! uint "$flows" || [ "$flows" = 0 ]; then
+		restore_sys "$key"
+		return $?
+	fi
+	set +f
+	for path in /sys/class/net/eth[01]/queues/rx-*/rps_flow_cnt; do
+		[ -f "$path" ] || continue
+		dev=${path%/queues/*}
+		[ -e "$dev/device" ] || continue
+		n=$(cat "$path")
+		uint "$n" && [ "$n" -le 1048576 ] || return 1
+		total=$((total + n))
+		[ "$total" -le 1048576 ] || return 1
+	done
+	cur=$(sys_read "$key")
+	uint "$cur" && [ "$cur" -lt "$total" ] || return 0
+	remember "$key" "$cur" || return 1
+	while [ "$expected" -lt "$total" ]; do expected=$((expected * 2)); done
+	if sys_write "$key" "$total"; then written "$key" "$expected"; else log 'global RFS table write failed'; fi
+	actual=$(sys_read "$key") || { log 'global RFS table readback failed'; return 1; }
+	if uint "$actual" && [ "$actual" -gt "$cur" ]; then
+		written "$key" "$actual"
+	fi
+	uint "$actual" && [ "$actual" -ge "$total" ] || log 'global RFS table readback below request'
+)
+
+down() {
+	local flags
+	flags=$(cat "/sys/class/net/$1/flags" 2>/dev/null) || return 1
+	case "$flags" in 0x*) case "${flags#0x}" in ''|*[!0-9a-fA-F]*) return 1 ;; esac ;; *) return 1 ;; esac
+	[ "${#flags}" -le 10 ] && [ "$((flags & 1))" = 0 ]
+}
+feature() {
+	local output
+	output=$(ethtool -k "$1" 2>/dev/null) || return 1
+	printf '%s\n' "$output" | awk -v k="$2:" '$1==k && NF==2 && ($2=="on" || $2=="off") {print $2; found=1} END {exit !found}'
+}
+ring() {
+	local output
+	output=$(ethtool -g "$1" 2>/dev/null) || return 1
+	printf '%s\n' "$output" | awk -v section="$2" -v k="$3:" '
+		/Pre-set maximums:/ {s="max"} /Current hardware settings:/ {s="cur"}
+		s==section && $1==k {print $2; found=1; exit} END {exit !found}'
+}
+gro_check() {
+	local name gro
+	config_get name "$1" name
+	config_get gro "$1" gro
+	[ "$name:$gro" != "$DEV:0" ] || GRO_BLOCKED=1
+}
+tune_features() {
+	local DEV f opt cur GRO_BLOCKED
+	# shellcheck disable=SC1091
+	. /lib/functions.sh
+	config_load network
+	for DEV in eth0 eth1; do
+		[ -e "/sys/class/net/$DEV/device" ] || continue
+		GRO_BLOCKED=0
+		config_foreach gro_check device
+		for f in rx-checksumming generic-receive-offload; do
+			opt=rx
+			if [ "$f" = generic-receive-offload ]; then
+				[ "$GRO_BLOCKED" = 0 ] || continue
+				opt=gro
+			fi
+			cur=$(feature "$DEV" "$f")
+			[ "$cur" = off ] || continue
+			remember "$DEV.$f" "$cur" || continue
+			if ethtool -K "$DEV" "$opt" on; then written "$DEV.$f" on; else log "feature request failed: $DEV $f"; fi
+			if cur=$(feature "$DEV" "$f") && [ "$cur" = on ]; then written "$DEV.$f" on; fi
+		done
+	done
+}
+tune_rings() {
+	local dev axis cur max
+	[ "$(uci -q get r4s_net_tune.main.ring)" = 1 ] || return 0
+	for dev in eth0 eth1; do
+		[ -e "/sys/class/net/$dev/device" ] || continue
+		down "$dev" || continue
+		for axis in RX TX; do
+			cur=$(ring "$dev" cur "$axis"); max=$(ring "$dev" max "$axis")
+			uint "$cur" && uint "$max" && [ "$cur" -lt "$max" ] || continue
+			remember "$dev.$axis" "$cur" || continue
+			down "$dev" || continue
+			if ethtool -G "$dev" "$(printf '%s' "$axis" | tr '[:upper:]' '[:lower:]')" "$max"; then written "$dev.$axis" "$max"; else log "ring request failed: $dev $axis"; fi
+			if cur=$(ring "$dev" cur "$axis") && [ "$cur" = "$max" ]; then written "$dev.$axis" "$max"; fi
+		done
+	done
+}
+
+restore_sys() {
+	local key="$1" base last cur
+	[ -f "$STATE/$key.last" ] || return 0
+	base=$(cat "$STATE/$key.base") && last=$(cat "$STATE/$key.last") || { log "snapshot read failed: $key"; return 1; }
+	values_ok $base && values_ok $last || { log "invalid baseline: $key"; return 1; }
+	set -- $base
+	case "$key" in net.ipv4.tcp_*) [ "$#" = 3 ] || return 1 ;; *) [ "$#" = 1 ] || return 1 ;; esac
+	cur=$(sys_read "$key") && values_ok $cur || { log "restore read failed: $key"; return 1; }
+	cur=$(normalize "$cur")
+	[ "$cur" = "$last" ] || { forget "$key"; return 0; }
+	if sys_write "$key" "$base" && cur=$(sys_read "$key") && values_ok $cur && [ "$(normalize "$cur")" = "$base" ]; then
+		forget "$key"
+	else log "restore write/readback failed: $key"; return 1; fi
+}
+restore() {
+	local key base last cur dev f opt axis status=0 allow_rings="$1"
+	for key in $KEYS; do restore_sys "$key" || status=1; done
+	for dev in eth0 eth1; do
+		[ -e "/sys/class/net/$dev/device" ] || continue
+		for f in rx-checksumming generic-receive-offload; do
+			key="$dev.$f"
+			[ -f "$STATE/$key.last" ] || continue
+			base=$(cat "$STATE/$key.base") && last=$(cat "$STATE/$key.last") || { log "snapshot read failed: $key"; status=1; continue; }
+			case "$base:$last" in off:on|on:off) ;; *) log "invalid baseline: $key"; status=1; continue ;; esac
+			cur=$(feature "$dev" "$f") || { log "restore read failed: $key"; status=1; continue; }
+			[ "$cur" = "$last" ] || { forget "$key"; continue; }
+			opt=rx; [ "$f" != generic-receive-offload ] || opt=gro
+			if ethtool -K "$dev" "$opt" "$base" && cur=$(feature "$dev" "$f") && [ "$cur" = "$base" ]; then
+				forget "$key"
+			else log "restore write/readback failed: $key"; status=1; fi
+		done
+		for axis in RX TX; do
+			key="$dev.$axis"
+			[ -f "$STATE/$key.last" ] || continue
+			base=$(cat "$STATE/$key.base") && last=$(cat "$STATE/$key.last") || { log "snapshot read failed: $key"; status=1; continue; }
+			uint "$base" && uint "$last" || { log "invalid baseline: $key"; status=1; continue; }
+			cur=$(ring "$dev" cur "$axis") && uint "$cur" || { log "restore read failed: $key"; status=1; continue; }
+			[ "$cur" = "$last" ] || { forget "$key"; continue; }
+			if [ "$allow_rings" != rings ] || ! down "$dev"; then
+				printf '%s\n' 'restore on next DOWN boot; reboot resets driver rings' >"$STATE/ring-restore-pending"
+				log "ring restore deferred until DOWN boot: $dev $axis"
+				continue
+			fi
+			if ethtool -G "$dev" "$(printf '%s' "$axis" | tr '[:upper:]' '[:lower:]')" "$base" && cur=$(ring "$dev" cur "$axis") && [ "$cur" = "$base" ]; then
+				forget "$key"
+			else log "restore write/readback failed: $key"; status=1; fi
+		done
+	done
+	return "$status"
+}
+
+defaults() {
+	local mode flows pending package
+	[ "$(uci -q get r4s_net_tune.main.defaults_applied)" != 1 ] || return 0
+	enabled || return 0
+	for package in network r4s_net_tune; do
+		pending=$(uci -q changes "$package") || return 1
+		if [ -n "$pending" ]; then
+			log "$package has pending UCI changes; deferring defaults"
+			return 1
+		fi
+	done
+	uci -q get 'network.@globals[0]' >/dev/null || uci add network globals >/dev/null || return 1
+	mode=$(uci -q get 'network.@globals[0].packet_steering')
+	case "$mode" in ''|1) uci set 'network.@globals[0].packet_steering=2' || return 1 ;; esac
+	flows=$(uci -q get 'network.@globals[0].steering_flows')
+	case "$flows" in ''|0) uci set 'network.@globals[0].steering_flows=128' || return 1 ;; esac
+	uci commit network || return 1
+	uci set r4s_net_tune.main.defaults_applied=1 && uci commit r4s_net_tune
+}
+queue() {
+	local n
+	[ -f "$STATE/active" ] || return 0
+	n=$(cat "$STATE/serial" 2>/dev/null); uint "$n" || n=0
+	n=$((n + 1)); printf '%s\n' "$n" >"$STATE/serial"
+	printf '%s\n' "$n" >"$STATE/pending"
+}
+apply() {
+	[ -f "$STATE/active" ] || return 0
+	if ! enabled; then restore; return; fi
+	/etc/init.d/packet_steering reload || log 'native packet steering reload failed'
+	tune_rfs
+	tune_sys
+	tune_features
+}
+activate() {
+	local n
+	n=$(cat "$STATE/generation" 2>/dev/null); uint "$n" || n=0
+	n=$((n + 1)); printf '%s\n' "$n" >"$STATE/generation"
+	printf '%s\n' "$n" >"$STATE/active"
+	queue
+	printf '%s\n' "$n"
+}
+owns() { [ "$(cat "$STATE/active" 2>/dev/null)" = "$1" ]; }
+cleanup() { if owns "$1"; then stop; fi; }
+stop() { rm -f "$STATE/active" "$STATE/pending"; restore rings; }
+boot_tune() { restore rings || return 1; enabled && tune_rings; return 0; }
+drain() {
+	owns "$2" || return 0
+	[ -f "$STATE/pending" ] && [ "$(cat "$STATE/pending")" = "$1" ] || return 0
+	rm -f "$STATE/pending"
+	apply
+}
+watch() {
+	local generation="$1" token
+	uint "$generation" || return 1
+	owns "$generation" || return 0
+	exec 8>"$STATE/watch.lock"
+	trap 'exit 0' TERM INT
+	trap 'locked cleanup "$generation"' EXIT
+	# Wait without lock 9: the old generation may still need it for EXIT.
+	flock -x 8 || return 1
+	while owns "$generation"; do
+		if [ -f "$STATE/pending" ]; then
+			token=$(cat "$STATE/pending")
+			sleep 2
+			locked drain "$token" "$generation"
+		else sleep 1; fi
+	done
+}
+
+[ "$(id -u)" = 0 ] || exit 1
+if ! board_ok; then
+	[ "$1" != activate ] && [ "$1" != watch ]
+	exit $?
+fi
+[ ! -L "$STATE" ] || exit 1
+mkdir -p "$STATE" && chmod 700 "$STATE" || exit 1
+case "$1" in
+	defaults) locked defaults ;;
+	activate) locked activate ;;
+	queue) locked queue ;;
+	apply) locked apply ;;
+	boot) locked boot_tune ;;
+	stop) locked stop ;;
+	watch) watch "$2" ;;
+	*) exit 1 ;;
+esac

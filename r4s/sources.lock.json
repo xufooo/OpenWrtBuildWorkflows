@@ -14,6 +14,30 @@
       "luci.patch": "e2e196e8e470e91d52b51a0f4bfc7eb157288726a20aded85c711c228114a4f4"
     }
   },
+  "network_tuning": {
+    "references": {
+      "yaof": {
+        "url": "https://github.com/QiuSimons/YAOF",
+        "commit": "c7540bb69bd7753cde698e5a395eb16393799ab9"
+      },
+      "system_addon": {
+        "url": "https://github.com/QiuSimons/OpenWrt-Add",
+        "commit": "aefd16b9730679bdd016167408a24b8f485786e5"
+      },
+      "native_steering": {
+        "url": "https://github.com/openwrt/openwrt",
+        "commit": "64900e756efa667774214f9c6b17c113222e01f7"
+      },
+      "friendlywrt": {
+        "url": "https://github.com/friendlyarm/friendlywrt",
+        "commit": "dc0d9dc877638c2107998c180e8741260a352a66"
+      },
+      "friendlywrt_manifest": {
+        "url": "https://github.com/friendlyarm/friendlywrt_manifests",
+        "commit": "f2cd2723d13afec08a14c46213aa64e484fbebbf"
+      }
+    }
+  },
   "extras": {
     "passwall": {
       "url": "https://github.com/Openwrt-Passwall/openwrt-passwall.git",

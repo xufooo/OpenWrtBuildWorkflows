@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config tuning 'main'
+	option enabled '1'
+	option ring '1'
+	option defaults_applied '0'
