@@ -24,7 +24,7 @@ class BuildTests(unittest.TestCase):
         image = root / "test.img.gz"
         image.write_bytes(gzip.compress(mbr + header))
         contents = {name: "binary fixture" for name in (
-            "usr/bin/mosdns", "usr/bin/sing-box", "usr/bin/xray", "usr/bin/lucky",
+            "usr/bin/mosdns", "usr/bin/sing-box", "usr/bin/xray", "usr/bin/lucky", "usr/bin/perf",
             "etc/init.d/passwall", "etc/init.d/mosdns", "etc/init.d/lucky")}
         contents.update({
             "etc/config/firewall": "option fullcone4 0\noption fullcone6 0\n",
@@ -61,6 +61,20 @@ class BuildTests(unittest.TestCase):
             image, reader = self.image_fixture(Path(temp))
             with patch.object(build, "run", side_effect=reader):
                 build.verify_image(image)
+
+    def test_image_requires_executable_perf(self):
+        for variant in ("missing", "not_executable"):
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as temp:
+                image, reader = self.image_fixture(Path(temp))
+                def altered(*args, **kwargs):
+                    result = reader(*args, **kwargs)
+                    if args[1] == "-lln":
+                        if variant == "missing":
+                            return "\n".join(line for line in result.splitlines() if "squashfs-root/usr/bin/perf" not in line)
+                        return result.replace("-rwxr-xr-x squashfs-root/usr/bin/perf", "-rw-r--r-- squashfs-root/usr/bin/perf")
+                    return result
+                with patch.object(build, "run", side_effect=altered), self.assertRaisesRegex(SystemExit, "perf"):
+                    build.verify_image(image)
 
     def test_image_rejects_retired_files_and_hooks(self):
         for retired, hook in (("usr/libexec/r4s-accel", None),
@@ -139,6 +153,7 @@ class BuildTests(unittest.TestCase):
 
     def make_config(self, tree):
         options = [f"CONFIG_PACKAGE_{name}=y" for name in build.REQUIRED]
+        options += [f"CONFIG_{name}=y" for name in build.DIAGNOSTIC_OPTIONS]
         options += ["CONFIG_" + name + "=y" for name in (
             "TARGET_rockchip_armv8_DEVICE_friendlyarm_nanopi-r4s",
             "TARGET_ROOTFS_SQUASHFS", "PACKAGE_luci-app-passwall_Nftables_Transparent_Proxy",
@@ -240,13 +255,14 @@ class BuildTests(unittest.TestCase):
             target = tree / "bin/targets/rockchip/armv8"
             target.mkdir(parents=True)
             (target / "openwrt-friendlyarm_nanopi-r4s-squashfs-sysupgrade.img.gz").touch()
-            manifest = "\n".join(f"{name} - 1-r1" for name in build.REQUIRED)
+            manifest = "\n".join(f"{name} - " + ("6.12.112-r7" if name == "perf" else "1-r1") for name in build.REQUIRED)
             manifest += f"\nkernel - 6.12.112~test-r{build.LOCK['fullcone']['kernel_release']}\n"
             (target / "openwrt-friendlyarm_nanopi-r4s.manifest").write_text(manifest)
             for name in ("sources.lock.buildinfo", "feeds.revisions.buildinfo", "config.seed.buildinfo"):
                 (tree / name).write_text("test fixture\n")
             (tree / "public-key.pem").write_text("public fixture\n")
             (tree / "private-key.pem").write_text("private fixture\n")
+            self.diagnostic_fixture(tree)
             output = Path(temp) / "output"
             with patch.object(build, "verify_image"), patch.object(build, "run") as commands:
                 build.collect(tree, output)
@@ -254,6 +270,57 @@ class BuildTests(unittest.TestCase):
             self.assertIn("targets/rockchip/armv8/packages", tar)
             self.assertTrue((output / "public-key.pem").exists())
             self.assertFalse((output / "private-key.pem").exists())
+            self.assertTrue((output / "kernel.config.buildinfo").is_file())
+            self.assertTrue((output / "vmlinux").is_file())
+            self.assertIn("diagnostics only", (output / "profiling.buildinfo").read_text())
+            manifest_path = target / "openwrt-friendlyarm_nanopi-r4s.manifest"
+            manifest_path.write_text(manifest.replace("perf - 6.12.112-r7", "perf - 6.6.1-r1"))
+            with patch.object(build, "verify_image"), self.assertRaisesRegex(SystemExit, "perf package does not match"):
+                build.collect(tree, Path(temp) / "mismatched-output")
+
+    def diagnostic_fixture(self, tree):
+        kernel = tree / "build_dir/target-test/linux-rockchip_armv8/linux-6.12.112"
+        kernel.mkdir(parents=True)
+        (kernel / ".config").write_text("\n".join(f"CONFIG_{name}=y" for name in build.DIAGNOSTIC_KERNEL_OPTIONS) + "\n")
+        header = bytearray(64)
+        header[:6] = b"\x7fELF\x02\x01"
+        struct.pack_into("<H", header, 18, 183)
+        (kernel / "vmlinux").write_bytes(header)
+        return kernel
+
+    def test_diagnostic_actual_kernel_is_required(self):
+        with tempfile.TemporaryDirectory() as temp:
+            tree = Path(temp)
+            with self.assertRaisesRegex(SystemExit, "actual diagnostic kernel"):
+                build.diagnostic_kernel(tree)
+            kernel = self.diagnostic_fixture(tree)
+            build.diagnostic_kernel(tree)
+            (kernel / ".config").write_text("CONFIG_PERF_EVENTS=y\n")
+            with self.assertRaisesRegex(SystemExit, "Actual kernel lacks"):
+                build.diagnostic_kernel(tree)
+
+    def test_diagnostic_vmlinux_architecture_is_checked(self):
+        with tempfile.TemporaryDirectory() as temp:
+            tree = Path(temp)
+            kernel = self.diagnostic_fixture(tree)
+            (kernel / "vmlinux").write_bytes(b"wrong architecture")
+            with self.assertRaisesRegex(SystemExit, "AArch64 ELF"):
+                build.diagnostic_kernel(tree)
+            header = bytearray(64)
+            header[:6] = b"\x7fELF\x02\x01"
+            struct.pack_into("<H", header, 18, 62)
+            (kernel / "vmlinux").write_bytes(header)
+            with self.assertRaisesRegex(SystemExit, "AArch64 ELF"):
+                build.diagnostic_kernel(tree)
+
+    def test_diagnostic_menu_options_are_required(self):
+        with tempfile.TemporaryDirectory() as temp:
+            tree = Path(temp)
+            self.make_config(tree)
+            config = tree / ".config"
+            config.write_text(config.read_text().replace("CONFIG_KERNEL_PERF_EVENTS=y\n", ""))
+            with self.assertRaisesRegex(SystemExit, "KERNEL_PERF_EVENTS"):
+                build.check_config(tree)
 
     def test_required_configuration_passes(self):
         with tempfile.TemporaryDirectory() as temp:

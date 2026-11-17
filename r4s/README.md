@@ -1,5 +1,8 @@
 # R4S firmware build
 
+This is the diagnostic branch. See [DIAGNOSTICS.md](DIAGNOSTICS.md).
+It adds profiling instrumentation, not a performance fix, and is not automatically deployed.
+
 OpenWrt 25.12.6, rockchip/armv8, NanoPi R4S squashfs image. The source commit
 and extra package repositories are recorded in sources.lock.json; official
 feeds use the exact revisions supplied by the OpenWrt release.
@@ -16,7 +19,7 @@ IPv4 and IPv6 are both disabled initially; the Firewall page provides the
 switch. Enabling IPv4 does not enable NAT6. No YAOF default-settings package,
 personal configuration, CPU overclock or vermagic override is imported.
 
-This is now a patched kernel. Its package release is 1002, distinct from the
+This is now a diagnostic patched kernel. Its package release is 1003, distinct from the
 official release, so official kmods cannot silently replace the matching ones.
 Use modules from the same build archive; do not force-install official kmods.
 Clock and network driver selections remain upstream defaults. User-space C/C++
@@ -32,7 +35,7 @@ PassWall's feeds, sbwml's MosDNS/LuCI feed, Lucky's official feed and Argon.
 Lucky's upstream recipe uses its author's official release binary. MosDNS
 uses its feed's normal public patch set, not a private firmware binary.
 
-Pushes to r4s-build start GitHub Actions. Later runs may be
+Pushes to r4s-diagnostics start GitHub Actions. Later runs may be
 started manually. Builds do not cancel other running builds.
 
 Artifacts include firmware, checksums, package manifest, full build config,
@@ -43,7 +46,7 @@ They can be updated using compatible upstream APK releases or a new build;
 this does not promise the official OpenWrt server hosts third-party packages.
 The archive includes target-specific module packages and indexes, and the APK
 public key (never the private key). Kernel modules must match the firmware
-kernel package release and ABI (now release 1002, changed with the PCIe patch).
+kernel package release and ABI (diagnostic release 1003 adds profiling support).
 The build does not publish or configure an automatic third-party APK update
 server.
 

@@ -20,13 +20,15 @@ NET_TUNE_FILES = (
     "usr/libexec/r4s-net-tune", "etc/hotplug.d/net/90-r4s-net-tune",
     "etc/uci-defaults/90-r4s-net-tune",
 )
+DIAGNOSTIC_OPTIONS = ("KERNEL_PERF_EVENTS", "KERNEL_ARM_PMU", "KERNEL_ARM_PMUV3")
+DIAGNOSTIC_KERNEL_OPTIONS = ("PERF_EVENTS", "ARM_PMU", "ARM_PMUV3", "KALLSYMS", "FRAME_POINTER")
 REQUIRED = (
     "luci", "luci-ssl", "luci-theme-argon", "dnsmasq-full", "firewall4",
     "luci-app-passwall", "sing-box", "xray-core", "luci-app-mosdns", "mosdns",
     "luci-app-lucky", "lucky", "luci-app-sqm", "luci-app-nlbwmon",
     "luci-app-upnp", "luci-app-wol", "luci-app-ttyd", "luci-app-filemanager",
     "htop", "ethtool", "tcpdump", "iperf3", "curl", "bind-dig",
-    "kmod-nf-nat", "kmod-nft-nat", "kmod-nft-offload", "conntrack", "r4s-net-tune", "flock",
+    "kmod-nf-nat", "kmod-nft-nat", "kmod-nft-offload", "conntrack", "r4s-net-tune", "flock", "perf",
 )
 
 
@@ -242,6 +244,7 @@ def prepare(tree):
 def check_config(tree):
     config = set((tree / ".config").read_text().splitlines())
     missing = [name for name in REQUIRED if f"CONFIG_PACKAGE_{name}=y" not in config]
+    missing += [option for option in DIAGNOSTIC_OPTIONS if f"CONFIG_{option}=y" not in config]
     for option in (
         "TARGET_rockchip_armv8_DEVICE_friendlyarm_nanopi-r4s",
         "TARGET_ROOTFS_SQUASHFS", "PACKAGE_luci-app-passwall_Nftables_Transparent_Proxy",
@@ -307,10 +310,12 @@ def verify_image(image):
                 if name:
                     entries[name] = fields
             paths = set(entries)
-            for name in ("usr/bin/mosdns", "usr/bin/sing-box", "usr/bin/xray", "usr/bin/lucky",
+            for name in ("usr/bin/mosdns", "usr/bin/sing-box", "usr/bin/xray", "usr/bin/lucky", "usr/bin/perf",
                          "etc/init.d/passwall", "etc/init.d/mosdns", "etc/init.d/lucky"):
                 if f"squashfs-root/{name}" not in paths:
                     raise SystemExit(f"Required file missing from firmware: {name}")
+            if entries["squashfs-root/usr/bin/perf"][0][3:4] != "x":
+                raise SystemExit("Diagnostic perf is not executable in firmware")
             firewall = run("unsquashfs", "-cat", str(squashfs), "etc/config/firewall", capture=True)
             check_fullcone_defaults(firewall)
             retired = {path for path in paths if "r4s-accel" in path or "r4s_accel" in path}
@@ -344,8 +349,27 @@ def verify_image(image):
                 raise SystemExit("FullCone LuCI support missing from firmware")
 
 
+def diagnostic_kernel(tree):
+    kernels = list(tree.glob("build_dir/target-*/linux-rockchip_armv8/linux-*/.config"))
+    if len(kernels) != 1:
+        raise SystemExit("Expected one actual diagnostic kernel configuration")
+    config = set(kernels[0].read_text().splitlines())
+    missing = [name for name in DIAGNOSTIC_KERNEL_OPTIONS if f"CONFIG_{name}=y" not in config]
+    if missing:
+        raise SystemExit(f"Actual kernel lacks diagnostic options: {missing}")
+    vmlinux = kernels[0].parent / "vmlinux"
+    if not vmlinux.is_file():
+        raise SystemExit("Diagnostic vmlinux is missing")
+    with vmlinux.open("rb") as stream:
+        header = stream.read(64)
+    if len(header) != 64 or header[:6] != b"\x7fELF\x02\x01" or struct.unpack_from("<H", header, 18)[0] != 183:
+        raise SystemExit("Diagnostic vmlinux is not an AArch64 ELF")
+    return kernels[0], vmlinux
+
+
 def collect(tree, output):
     check_config(tree)
+    kernel_config, vmlinux = diagnostic_kernel(tree)
     target = tree / "bin" / "targets" / "rockchip" / "armv8"
     images = list(target.glob("*friendlyarm_nanopi-r4s-squashfs-sysupgrade.img.gz"))
     if len(images) != 1:
@@ -355,8 +379,14 @@ def collect(tree, output):
     if len(manifests) != 1:
         raise SystemExit("R4S image manifest missing")
     packages = {line.split()[0] for line in manifests[0].read_text().splitlines() if line.strip()}
-    if not re.search(rf"^kernel\s+-\s+\S+-r{LOCK['fullcone']['kernel_release']}$", manifests[0].read_text(), re.M):
+    manifest = manifests[0].read_text()
+    kernel_package = re.search(rf"^kernel\s+-\s+(\S+)-r{LOCK['fullcone']['kernel_release']}$", manifest, re.M)
+    if not kernel_package:
         raise SystemExit("Firmware manifest lacks the isolated FullCone kernel package release")
+    kernel_version = kernel_package[1].split("~", 1)[0]
+    perf_package = re.search(r"^perf\s+-\s+(\S+)$", manifest, re.M)
+    if not perf_package or not perf_package[1].startswith(kernel_version + "-r"):
+        raise SystemExit("Diagnostic perf package does not match the kernel version")
     missing = set(REQUIRED) - packages
     if missing:
         raise SystemExit(f"Required packages missing from image manifest: {sorted(missing)}")
@@ -369,6 +399,19 @@ def collect(tree, output):
     for name in ("sources.lock.buildinfo", "feeds.revisions.buildinfo", "config.seed.buildinfo"):
         shutil.copy2(tree / name, output / name)
     shutil.copy2(tree / ".config", output / "full.config.buildinfo")
+    shutil.copy2(kernel_config, output / "kernel.config.buildinfo")
+    shutil.copy2(vmlinux, output / "vmlinux")
+    with vmlinux.open("rb") as stream:
+        vmlinux_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    profiling = {
+        "purpose": "diagnostics only; not a throughput fix or device acceptance",
+        "kernel_package_release": LOCK["fullcone"]["kernel_release"],
+        "kernel_options": DIAGNOSTIC_KERNEL_OPTIONS,
+        "vmlinux_sha256": vmlinux_digest,
+        "automatic_recording": False,
+        "deployment": "no router access or automatic flash in this workflow",
+    }
+    (output / "profiling.buildinfo").write_text(json.dumps(profiling, indent=2) + "\n")
     tuning_info = {
         "references": LOCK["network_tuning"]["references"],
         "files": {name: hashlib.sha256((NET_TUNE / "files" / name).read_bytes()).hexdigest()

@@ -1,9 +1,9 @@
-name: Build R4S OpenWrt
+name: Build R4S Diagnostics
 
 on:
   workflow_dispatch:
   push:
-    branches: [r4s-build]
+    branches: [r4s-diagnostics]
     paths:
       - '.github/workflows/build-r4s.yml'
       - 'r4s/**'
@@ -72,7 +72,7 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: r4s-openwrt-25.12.6-net-tune-${{ github.run_number }}
+          name: r4s-diagnostics-25.12.6-perf-${{ github.run_number }}
           path: r4s-output/
           if-no-files-found: error
           retention-days: 30
@@ -80,7 +80,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r4s-build-diagnostics-${{ github.run_number }}
+          name: r4s-diagnostics-build-logs-${{ github.run_number }}
           path: |
             ${{ runner.temp }}/openwrt/*.log
             ${{ runner.temp }}/openwrt/.config
