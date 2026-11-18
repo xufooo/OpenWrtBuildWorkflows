@@ -185,6 +185,7 @@ def prepare_integrations(tree):
 
 def prepare(tree):
     checkout(LOCK["openwrt"], tree)
+    apply_package_backports(tree)
     # The release already pins all official feeds. Use GitHub mirrors, same SHAs.
     feeds = (tree / "feeds.conf.default").read_text()
     feeds = feeds.replace("https://git.openwrt.org/feed/packages.git", "https://github.com/openwrt/packages.git")
@@ -237,6 +238,17 @@ def prepare(tree):
         if feed.is_dir() and (feed / ".git").exists():
             revisions[feed.name] = run("git", "rev-parse", "HEAD", cwd=feed, capture=True).strip()
     (tree / "feeds.revisions.buildinfo").write_text(json.dumps(revisions, indent=2) + "\n")
+
+
+def apply_package_backports(tree):
+    for commit in LOCK["openwrt_package_backports"]:
+        run("git", "fetch", "--depth=2", "origin", commit, cwd=tree)
+        diff = run("git", "diff", "--binary", f"{commit}^", commit,
+                   cwd=tree, capture=True)
+        if not diff:
+            raise SystemExit(f"Empty OpenWrt package backport: {commit}")
+        subprocess.run(["git", "apply", "--index"], cwd=tree,
+                       input=diff, text=True, check=True)
 
 
 def check_config(tree):

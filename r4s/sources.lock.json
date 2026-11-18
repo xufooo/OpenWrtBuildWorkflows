@@ -4,6 +4,11 @@
     "commit": "64900e756efa667774214f9c6b17c113222e01f7",
     "version": "25.12.6"
   },
+  "openwrt_package_backports": [
+    "514fad5218edaa4a36af7c15c0f46cdff0139309",
+    "5c334c12e26ee536d12f684c8f5b213cabb165c6",
+    "d4cb7022585390564196f9849b2f5d10aba006e9"
+  ],
   "fullcone": {
     "url": "https://github.com/QiuSimons/YAOF.git",
     "commit": "8f53c9e82281550477804102e2538486ef13838b",

@@ -123,8 +123,11 @@ class BuildTests(unittest.TestCase):
                     (destination / "xray-core").mkdir()
                     (destination / "xray-core/Makefile").write_text("PKG_BUILD_DEPENDS:=golang/host\n")
 
-            with patch.object(build, "checkout", side_effect=checkout), patch.object(build, "run"):
+            with (patch.object(build, "checkout", side_effect=checkout),
+                  patch.object(build, "run"),
+                  patch.object(build, "apply_package_backports") as backports):
                 build.prepare(tree)
+            backports.assert_called_once_with(tree)
             extras = tree / "package" / "r4s-extras"
             self.assertTrue((extras / "luci-theme-argon").is_dir())
             self.assertFalse((extras / "argon").exists())

@@ -55,6 +55,13 @@ build is not a claim of hardware boot validation or increased performance.
 
 ## Additional integrations
 
+- Backport the OpenWrt 25.12 branch's dnsmasq 2.93 fix for slow loading and
+  reloading of large hosts files. This does not change MosDNS configuration.
+- Apply the official October and November uhttpd package updates. These
+  improve request handling and stop one source monopolizing LuCI script slots.
+  Exact package commits are listed separately from the base release in
+  `sources.lock.json`; no application defaults are imported.
+
 - Add anaelorlinski's PCIe PHY reset-on-probe fix, preserving the upstream lane
   power-on fix. This targets warm-reboot initialization, not faster Ethernet.
 - Expose miniupnpd 2.3.9's existing ext_allow_private_ipv4 option in UCI/LuCI,
