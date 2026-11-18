@@ -142,8 +142,11 @@ def check_package_backports(tree):
     dnsmasq = tree / "package/network/services/dnsmasq"
     for name in DNSMASQ_PATCHES:
         patch = dnsmasq / "patches" / name
-        if not patch.is_file() or not patch.read_text().startswith("--- "):
+        if not patch.is_file():
             raise SystemExit(f"dnsmasq host-load backport patch missing: {name}")
+        body = patch.read_text()
+        if "store_name" not in body or "+++ b/" not in body:
+            raise SystemExit(f"dnsmasq host-load backport patch is not the store_name fix: {name}")
     recipe = (dnsmasq / "Makefile").read_text()
     if not re.search(r"^PKG_RELEASE:=([2-9]|[1-9]\d+)$", recipe, re.M):
         raise SystemExit("dnsmasq release bump from the host-load backport is missing")

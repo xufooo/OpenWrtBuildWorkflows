@@ -146,7 +146,8 @@ class BuildTests(unittest.TestCase):
         dnsmasq = tree / "package/network/services/dnsmasq"
         (dnsmasq / "patches").mkdir(parents=True, exist_ok=True)
         for name in build.DNSMASQ_PATCHES:
-            (dnsmasq / "patches" / name).write_text("--- a/src/option.c\n+++ b/src/option.c\n")
+            (dnsmasq / "patches" / name).write_text(
+                "--- a/src/cache.c\n+++ b/src/cache.c\n-store_name\n+store_name_fixed\n")
         (dnsmasq / "Makefile").write_text("PKG_UPSTREAM_VERSION:=2.93\nPKG_RELEASE:=2\n")
         uhttpd = tree / "package/network/services/uhttpd"
         uhttpd.mkdir(parents=True, exist_ok=True)
@@ -552,7 +553,8 @@ class BuildTests(unittest.TestCase):
             patches = tree / "package/network/services/dnsmasq/patches"
             patches.mkdir(parents=True)
             for name in build.DNSMASQ_PATCHES:
-                (patches / name).write_text("--- a/src/option.c\n+++ b/src/option.c\n")
+                (patches / name).write_text(
+                    "--- a/src/cache.c\n+++ b/src/cache.c\n@@ -1 +1 @@\n-store_name\n+store_name_fixed\n")
             (tree / "package/network/services/dnsmasq/Makefile").write_text("PKG_RELEASE:=2\n")
             (tree / "package/network/services/uhttpd").mkdir(parents=True)
             (tree / "package/network/services/uhttpd/Makefile").write_text(
@@ -562,7 +564,8 @@ class BuildTests(unittest.TestCase):
             (patches / build.DNSMASQ_PATCHES[0]).unlink()
             with self.assertRaisesRegex(SystemExit, "host-load backport patch missing"):
                 build.check_package_backports(tree)
-            (patches / build.DNSMASQ_PATCHES[0]).write_text("--- a\n+++ b\n")
+            (patches / build.DNSMASQ_PATCHES[0]).write_text(
+                "--- a/src/cache.c\n+++ b/src/cache.c\n-store_name\n+store_name_fixed\n")
             (tree / "package/network/services/uhttpd/Makefile").write_text("PKG_RELEASE:=1\n")
             with self.assertRaisesRegex(SystemExit, "uhttpd request-slot update missing"):
                 build.check_package_backports(tree)
