@@ -528,7 +528,8 @@ apply
                 for action in ("add", "remove"):
                     old = self.state("serial").read_text()
                     subprocess.run(["/bin/sh", str(script)], env=dict(self.env, **{var: dev, "ACTION": action}), check=True)
-                    self.assertNotEqual(self.state("serial").read_text(), old)
+                    changed = self.state("serial").read_text() != old
+                    self.assertEqual(changed, dev in ("eth0", "eth1"), (var, dev, action))
         old = self.state("serial").read_text()
         subprocess.run(["/bin/sh", str(script)], env=dict(self.env, DEVICENAME="wlan0", ACTION="add"), check=True)
         self.assertEqual(self.state("serial").read_text(), old)
@@ -551,6 +552,7 @@ apply
                 subprocess.run(["/bin/sh", "-n", str(source)], check=True)
         init = (FILES / "etc/init.d/r4s-net-tune").read_text()
         self.assertIn("START=19", init)
+        self.assertNotIn("sqm", init)
         self.assertIn("procd_set_param command /usr/libexec/r4s-net-tune watch", init)
         self.assertIn('watch "$generation"', init)
         makefile = (PACKAGE / "Makefile").read_text()

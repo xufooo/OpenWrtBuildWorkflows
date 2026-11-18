@@ -38,6 +38,9 @@ started manually. Builds do not cancel other running builds.
 Artifacts include firmware, checksums, package manifest, full build config,
 source/feed revisions and APK packages/indexes. Private signing keys are not
 uploaded. Official device package repository configuration is retained.
+The upstream target checksum file is named `openwrt-sha256sums` in the archive;
+`SHA256SUMS` covers all collected files. Their names remain distinct on
+case-insensitive filesystems such as the default macOS filesystem.
 Additional apps are independently packaged, not copied as unmanaged binaries.
 They can be updated using compatible upstream APK releases or a new build;
 this does not promise the official OpenWrt server hosts third-party packages.
@@ -113,8 +116,9 @@ recorded in `network-tuning.buildinfo`.
   cover the physical RX queues. Per-queue entries alone do not activate RFS
   while `rps_sock_flow_entries` is zero. This table is bounded and reversible;
   disabling steering/flow entries also relinquishes this package's RFS table.
-- Reapply the native configured steering after relevant network/SQM events,
-  using a quiet interval rather than rewriting the upstream service scripts.
+- Reapply the native configured steering after relevant network events,
+  using a quiet interval rather than rewriting upstream scripts. SQM changes
+  and IFB creation/removal do not independently trigger physical NIC tuning.
 - Raise socket-buffer ceilings without lowering existing TCP minimum/default
   values, and raise the network backlog limit. Larger ceilings are not memory
   reservations and are not evidence of improved throughput.

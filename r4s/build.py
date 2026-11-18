@@ -365,7 +365,8 @@ def collect(tree, output):
     output.mkdir(parents=True)
     for file in target.iterdir():
         if file.is_file():
-            shutil.copy2(file, output / file.name)
+            name = "openwrt-sha256sums" if file.name == "sha256sums" else file.name
+            shutil.copy2(file, output / name)
     for name in ("sources.lock.buildinfo", "feeds.revisions.buildinfo", "config.seed.buildinfo"):
         shutil.copy2(tree / name, output / name)
     shutil.copy2(tree / ".config", output / "full.config.buildinfo")

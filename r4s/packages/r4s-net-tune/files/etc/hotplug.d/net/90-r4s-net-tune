@@ -2,6 +2,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 dev=${DEVICENAME:-${INTERFACE:-}}
 case "$ACTION:$dev" in
-	add:eth0|remove:eth0|add:eth1|remove:eth1|add:ifb4eth0|remove:ifb4eth0|add:ifb4eth1|remove:ifb4eth1|add:ifb4pppoe-wan|remove:ifb4pppoe-wan)
+	add:eth0|remove:eth0|add:eth1|remove:eth1)
 		/usr/libexec/r4s-net-tune queue ;;
 esac

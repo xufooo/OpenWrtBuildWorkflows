@@ -2,6 +2,7 @@
 
 import importlib.util
 import gzip
+import hashlib
 import struct
 import tempfile
 import unittest
@@ -243,6 +244,8 @@ class BuildTests(unittest.TestCase):
             manifest = "\n".join(f"{name} - 1-r1" for name in build.REQUIRED)
             manifest += f"\nkernel - 6.12.112~test-r{build.LOCK['fullcone']['kernel_release']}\n"
             (target / "openwrt-friendlyarm_nanopi-r4s.manifest").write_text(manifest)
+            upstream_sums = b"upstream checksum fixture\n"
+            (target / "sha256sums").write_bytes(upstream_sums)
             for name in ("sources.lock.buildinfo", "feeds.revisions.buildinfo", "config.seed.buildinfo"):
                 (tree / name).write_text("test fixture\n")
             (tree / "public-key.pem").write_text("public fixture\n")
@@ -254,6 +257,11 @@ class BuildTests(unittest.TestCase):
             self.assertIn("targets/rockchip/armv8/packages", tar)
             self.assertTrue((output / "public-key.pem").exists())
             self.assertFalse((output / "private-key.pem").exists())
+            self.assertEqual((output / "openwrt-sha256sums").read_bytes(), upstream_sums)
+            names = [file.name.casefold() for file in output.iterdir()]
+            self.assertEqual(len(names), len(set(names)), "Artifact names collide on macOS")
+            expected = hashlib.sha256(upstream_sums).hexdigest() + "  openwrt-sha256sums\n"
+            self.assertIn(expected, (output / "SHA256SUMS").read_text())
 
     def test_required_configuration_passes(self):
         with tempfile.TemporaryDirectory() as temp:
