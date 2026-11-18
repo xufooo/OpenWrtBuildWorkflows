@@ -259,10 +259,11 @@ class BuildTests(unittest.TestCase):
             target = tree / "bin/targets/rockchip/armv8"
             target.mkdir(parents=True)
             (target / "openwrt-friendlyarm_nanopi-r4s-squashfs-sysupgrade.img.gz").touch()
-            manifest = "\n".join(f"{name} - 1-r1" for name in build.REQUIRED)
-            manifest += "".join(f"\n{name} - 1-r1" for name in build.KERNEL_MODULES
-                                if name not in build.REQUIRED)
-            kernel = f"6.12.112~test-r{build.LOCK['fullcone']['kernel_release']}"
+            release = build.LOCK["fullcone"]["kernel_release"]
+            kernel = f"6.12.112~test-r{release}"
+            manifest = "\n".join(f"{name} - 1-r1" for name in build.REQUIRED
+                                 if name not in build.KERNEL_MODULES)
+            manifest += "".join(f"\n{name} - 6.12.112-r{release}" for name in build.KERNEL_MODULES)
             manifest += f"\nkernel - {kernel}\n"
             manifest += "dnsmasq-full - 2.93-r2\nuhttpd - 2026.11.05~93b05e0b-r1\n"
             (target / "openwrt-friendlyarm_nanopi-r4s.manifest").write_text(manifest)
@@ -274,10 +275,14 @@ class BuildTests(unittest.TestCase):
             (uhttpd / "Makefile").write_text(
                 f"PKG_RELEASE:=1\nPKG_SOURCE_DATE:={build.UHTTPD_SOURCE_DATE}\n"
                 f"PKG_SOURCE_VERSION:={build.UHTTPD_SOURCE_VERSION}\n")
-            (tree / "tmp").mkdir()
-            (tree / "tmp/.packageinfo").write_text("".join(
-                f"Package: {name}\nVersion: 1\nDepends: kernel (={kernel})\n\n"
-                for name in build.KERNEL_MODULES))
+            kernel_dir = tree / ("build_dir/target-aarch64_cortex-a53_musl"
+                                 "/linux-rockchip_armv8/linux-6.12.112")
+            kernel_dir.mkdir(parents=True)
+            (kernel_dir / ".vermagic").write_text("test\n")
+            shipped = target / "packages"
+            shipped.mkdir()
+            for name in build.KERNEL_MODULES:
+                (shipped / f"{name}-6.12.112-r{release}.apk").touch()
             upstream_sums = b"upstream checksum fixture\n"
             (target / "sha256sums").write_bytes(upstream_sums)
             for name in ("sources.lock.buildinfo", "feeds.revisions.buildinfo", "config.seed.buildinfo"):
@@ -305,7 +310,7 @@ class BuildTests(unittest.TestCase):
                              "openwrt-friendlyarm_nanopi-r4s-squashfs-sysupgrade.img.gz")
             self.assertIn("build-provenance.json", (output / "SHA256SUMS").read_text())
 
-    def test_collect_rejects_mismatched_kernel_module_dependency(self):
+    def test_collect_rejects_kernel_from_another_build(self):
         with tempfile.TemporaryDirectory() as temp:
             tree = Path(temp) / "tree"
             tree.mkdir()
@@ -313,11 +318,12 @@ class BuildTests(unittest.TestCase):
             target = tree / "bin/targets/rockchip/armv8"
             target.mkdir(parents=True)
             (target / "openwrt-friendlyarm_nanopi-r4s-squashfs-sysupgrade.img.gz").touch()
-            kernel = f"6.12.112~test-r{build.LOCK['fullcone']['kernel_release']}"
-            manifest = "\n".join(f"{name} - 1-r1" for name in build.REQUIRED)
-            manifest += "".join(f"\n{name} - 1-r1" for name in build.KERNEL_MODULES
-                                if name not in build.REQUIRED)
-            manifest += f"\nkernel - {kernel}\ndnsmasq-full - 2.93-r2\nuhttpd - 2026.11.05~93b05e0b-r1\n"
+            release = build.LOCK["fullcone"]["kernel_release"]
+            manifest = "\n".join(f"{name} - 1-r1" for name in build.REQUIRED
+                                 if name not in build.KERNEL_MODULES)
+            manifest += "".join(f"\n{name} - 6.12.112-r{release}" for name in build.KERNEL_MODULES)
+            manifest += f"\nkernel - 6.12.112~other-r{release}\ndnsmasq-full - 2.93-r2"
+            manifest += "\nuhttpd - 2026.11.05~93b05e0b-r1\n"
             (target / "openwrt-friendlyarm_nanopi-r4s.manifest").write_text(manifest)
             (tree / "package/network/services/dnsmasq/patches").mkdir(parents=True)
             (tree / "package/network/services/dnsmasq/Makefile").write_text(
@@ -326,12 +332,52 @@ class BuildTests(unittest.TestCase):
             (tree / "package/network/services/uhttpd/Makefile").write_text(
                 f"PKG_RELEASE:=1\nPKG_SOURCE_DATE:={build.UHTTPD_SOURCE_DATE}\n"
                 f"PKG_SOURCE_VERSION:={build.UHTTPD_SOURCE_VERSION}\n")
-            (tree / "tmp").mkdir()
-            (tree / "tmp/.packageinfo").write_text("".join(
-                f"Package: {name}\nVersion: 1\nDepends: kernel (=6.12.112~other-r1002)\n\n"
-                for name in build.KERNEL_MODULES))
+            kernel_dir = tree / ("build_dir/target-aarch64_cortex-a53_musl"
+                                 "/linux-rockchip_armv8/linux-6.12.112")
+            kernel_dir.mkdir(parents=True)
+            (kernel_dir / ".vermagic").write_text("thisbuild\n")
+            shipped = target / "packages"
+            shipped.mkdir()
+            for name in build.KERNEL_MODULES:
+                (shipped / f"{name}-6.12.112-r{release}.apk").touch()
             with patch.object(build, "verify_image"), patch.object(build, "run"):
-                with self.assertRaisesRegex(SystemExit, "not pinned to the built kernel"):
+                with self.assertRaisesRegex(SystemExit, "but this tree built"):
+                    build.collect(tree, Path(temp) / "output")
+
+    def test_collect_rejects_kernel_module_from_another_build(self):
+        with tempfile.TemporaryDirectory() as temp:
+            tree = Path(temp) / "tree"
+            tree.mkdir()
+            self.make_config(tree)
+            target = tree / "bin/targets/rockchip/armv8"
+            target.mkdir(parents=True)
+            (target / "openwrt-friendlyarm_nanopi-r4s-squashfs-sysupgrade.img.gz").touch()
+            release = build.LOCK["fullcone"]["kernel_release"]
+            manifest = "\n".join(f"{name} - 1-r1" for name in build.REQUIRED
+                                 if name not in build.KERNEL_MODULES)
+            manifest += "".join(f"\n{name} - 6.12.112-r{release}" for name in build.KERNEL_MODULES)
+            manifest += f"\nkernel - 6.12.112~test-r{release}\ndnsmasq-full - 2.93-r2"
+            manifest += "\nuhttpd - 2026.11.05~93b05e0b-r1\n"
+            (target / "openwrt-friendlyarm_nanopi-r4s.manifest").write_text(manifest)
+            (tree / "package/network/services/dnsmasq/patches").mkdir(parents=True)
+            (tree / "package/network/services/dnsmasq/Makefile").write_text(
+                "PKG_UPSTREAM_VERSION:=2.93\nPKG_RELEASE:=2\n")
+            (tree / "package/network/services/uhttpd").mkdir(parents=True)
+            (tree / "package/network/services/uhttpd/Makefile").write_text(
+                f"PKG_RELEASE:=1\nPKG_SOURCE_DATE:={build.UHTTPD_SOURCE_DATE}\n"
+                f"PKG_SOURCE_VERSION:={build.UHTTPD_SOURCE_VERSION}\n")
+            kernel_dir = tree / ("build_dir/target-aarch64_cortex-a53_musl"
+                                 "/linux-rockchip_armv8/linux-6.12.112")
+            kernel_dir.mkdir(parents=True)
+            (kernel_dir / ".vermagic").write_text("test\n")
+            shipped = target / "packages"
+            shipped.mkdir()
+            for name in build.KERNEL_MODULES:
+                (shipped / f"{name}-6.12.112-r{release}.apk").touch()
+            (shipped / f"kmod-ifb-6.12.111-r{release}.apk").touch()
+            (shipped / f"kmod-ifb-6.12.112-r{release}.apk").unlink()
+            with patch.object(build, "verify_image"), patch.object(build, "run"):
+                with self.assertRaisesRegex(SystemExit, "ships as 6.12.111"):
                     build.collect(tree, Path(temp) / "output")
 
     def test_required_configuration_passes(self):
