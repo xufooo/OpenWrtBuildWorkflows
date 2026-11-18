@@ -34,7 +34,9 @@ REQUIRED = (
 DEVICE_SUPPORTED = "friendlyarm,nanopi-r4s"
 UBOOT_STAGING_NAME = "nanopi-r4s-rk3399-u-boot-rockchip.bin"
 BOOTLOADER_SECTOR = 64
-PARTITION_ALIGN = 32768
+# pine64-img passes 32768 to gen_image_generic.sh, which is an alignment in KiB;
+# the 32 MiB reserved area keeps the idbloader/U-Boot clear of the first partition.
+PARTITION_ALIGN = 65536
 BOOT_PAYLOADS = {"fit": b"\xd0\x0d\xfe\xed", "boot-script": b"\x27\x05\x19\x56"}
 # package/network/services/uhttpd: PKG_SOURCE_DATE/PKG_SOURCE_VERSION of the
 # backported 2026-11-05 request-slot update.
@@ -373,8 +375,8 @@ def verify_boot_area(image, tree):
         loader_start = BOOTLOADER_SECTOR * 512
         if kernel_start * 512 < loader_start + len(payload):
             raise SystemExit("Device U-Boot overlaps the boot partition")
-        if kernel_start % 2048:
-            raise SystemExit("Boot partition is not MiB aligned")
+        if kernel_start % PARTITION_ALIGN:
+            raise SystemExit("Boot partition does not start on the 32 MiB U-Boot boundary")
         if rootfs_start % PARTITION_ALIGN:
             raise SystemExit("Root partition ignores the U-Boot aligned reserved area")
         if kernel_start + kernel_count > rootfs_start:
@@ -439,8 +441,10 @@ def verify_device_metadata(image, tree):
         metadata = Path(temp) / "metadata.json"
         result = subprocess.run([str(tool), "-q", "-i", str(metadata), str(image)],
                                 text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if result.returncode != 0 or not metadata.is_file() or not metadata.stat().st_size:
-            raise SystemExit(f"Firmware metadata missing or unreadable: {result.stderr.strip()}")
+        if not metadata.is_file() or not metadata.stat().st_size:
+            raise SystemExit(
+                f"Firmware metadata missing or unreadable (fwtool exit {result.returncode}): "
+                f"{result.stderr.strip()}")
         data = json.loads(metadata.read_text())
     if data.get("metadata_version") not in ("1.0", "1.1"):
         raise SystemExit(f"Unsupported firmware metadata version: {data.get('metadata_version')}")
@@ -548,7 +552,9 @@ def check_service_versions(tree, manifest):
     uhttpd_release = re.search(r"^PKG_RELEASE:=(\d+)$", uhttpd, re.M)
     if not uhttpd_release:
         raise SystemExit("uhttpd recipe lost its release field")
-    expected_uhttpd = f"{UHTTPD_SOURCE_DATE}~{UHTTPD_SOURCE_VERSION[:8]}-r{uhttpd_release.group(1)}"
+    # Manifest versions normalize the source date to dots (e.g. 2026.11.05~93b05e0b-r1).
+    date = UHTTPD_SOURCE_DATE.replace("-", ".")
+    expected_uhttpd = f"{date}~{UHTTPD_SOURCE_VERSION[:8]}-r{uhttpd_release.group(1)}"
     if versions.get("uhttpd") != expected_uhttpd:
         raise SystemExit(f"uhttpd is {versions.get('uhttpd')}, expected {expected_uhttpd}")
 

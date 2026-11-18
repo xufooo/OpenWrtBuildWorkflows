@@ -263,7 +263,7 @@ class BuildTests(unittest.TestCase):
                                 if name not in build.REQUIRED)
             kernel = f"6.12.112~test-r{build.LOCK['fullcone']['kernel_release']}"
             manifest += f"\nkernel - {kernel}\n"
-            manifest += "dnsmasq-full - 2.93-r2\nuhttpd - 2026-11-05~93b05e0b-r1\n"
+            manifest += "dnsmasq-full - 2.93-r2\nuhttpd - 2026.11.05~93b05e0b-r1\n"
             (target / "openwrt-friendlyarm_nanopi-r4s.manifest").write_text(manifest)
             dnsmasq = tree / "package/network/services/dnsmasq"
             (dnsmasq / "patches").mkdir(parents=True)
@@ -316,7 +316,7 @@ class BuildTests(unittest.TestCase):
             manifest = "\n".join(f"{name} - 1-r1" for name in build.REQUIRED)
             manifest += "".join(f"\n{name} - 1-r1" for name in build.KERNEL_MODULES
                                 if name not in build.REQUIRED)
-            manifest += f"\nkernel - {kernel}\ndnsmasq-full - 2.93-r2\nuhttpd - 2026-11-05~93b05e0b-r1\n"
+            manifest += f"\nkernel - {kernel}\ndnsmasq-full - 2.93-r2\nuhttpd - 2026.11.05~93b05e0b-r1\n"
             (target / "openwrt-friendlyarm_nanopi-r4s.manifest").write_text(manifest)
             (tree / "package/network/services/dnsmasq/patches").mkdir(parents=True)
             (tree / "package/network/services/dnsmasq/Makefile").write_text(
@@ -461,7 +461,7 @@ class BuildTests(unittest.TestCase):
     def boot_image(self, root, payload, kernel_mib=4, rootfs_mib=8,
                    kernel_start=build.PARTITION_ALIGN, stale=b"", fit=True, label=b"kernel"):
         kernel_count = kernel_mib * 2048
-        rootfs_start = 65536
+        rootfs_start = 131072
         content = bytearray(rootfs_start * 512 + 96)
         content[510:512] = b"\x55\xaa"
         for index, (start, count) in enumerate(
