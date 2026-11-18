@@ -3,6 +3,7 @@
 import importlib.util
 import gzip
 import hashlib
+import json
 import struct
 import tempfile
 import unittest
@@ -141,6 +142,18 @@ class BuildTests(unittest.TestCase):
             self.assertIn("PKG_BUILD_DEPENDS:=golang1.27/host", (extras / "passwall_packages/xray-core/Makefile").read_text())
             build.check_fullcone(tree)
 
+    def backport_fixture(self, tree):
+        dnsmasq = tree / "package/network/services/dnsmasq"
+        (dnsmasq / "patches").mkdir(parents=True, exist_ok=True)
+        for name in build.DNSMASQ_PATCHES:
+            (dnsmasq / "patches" / name).write_text("--- a/src/option.c\n+++ b/src/option.c\n")
+        (dnsmasq / "Makefile").write_text("PKG_UPSTREAM_VERSION:=2.93\nPKG_RELEASE:=2\n")
+        uhttpd = tree / "package/network/services/uhttpd"
+        uhttpd.mkdir(parents=True, exist_ok=True)
+        (uhttpd / "Makefile").write_text(
+            f"PKG_RELEASE:=1\nPKG_SOURCE_DATE:={build.UHTTPD_SOURCE_DATE}\n"
+            f"PKG_SOURCE_VERSION:={build.UHTTPD_SOURCE_VERSION}\n")
+
     def make_config(self, tree):
         options = [f"CONFIG_PACKAGE_{name}=y" for name in build.REQUIRED]
         options += ["CONFIG_" + name + "=y" for name in (
@@ -181,6 +194,7 @@ class BuildTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             tree = Path(temp)
             self.make_config(tree)
+            self.backport_fixture(tree)
             kernel = tree / "build_dir/target-aarch64/linux-rockchip_armv8/linux-6.12.112/net/netfilter/nf_nat_masquerade.c"
             kernel.parent.mkdir(parents=True)
             kernel.write_text("void nf_nat_fullcone_helpers_register(void) {}\n")
@@ -245,8 +259,24 @@ class BuildTests(unittest.TestCase):
             target.mkdir(parents=True)
             (target / "openwrt-friendlyarm_nanopi-r4s-squashfs-sysupgrade.img.gz").touch()
             manifest = "\n".join(f"{name} - 1-r1" for name in build.REQUIRED)
-            manifest += f"\nkernel - 6.12.112~test-r{build.LOCK['fullcone']['kernel_release']}\n"
+            manifest += "".join(f"\n{name} - 1-r1" for name in build.KERNEL_MODULES
+                                if name not in build.REQUIRED)
+            kernel = f"6.12.112~test-r{build.LOCK['fullcone']['kernel_release']}"
+            manifest += f"\nkernel - {kernel}\n"
+            manifest += "dnsmasq-full - 2.93-r2\nuhttpd - 2026-11-05~93b05e0b-r1\n"
             (target / "openwrt-friendlyarm_nanopi-r4s.manifest").write_text(manifest)
+            dnsmasq = tree / "package/network/services/dnsmasq"
+            (dnsmasq / "patches").mkdir(parents=True)
+            (dnsmasq / "Makefile").write_text("PKG_UPSTREAM_VERSION:=2.93\nPKG_RELEASE:=2\n")
+            uhttpd = tree / "package/network/services/uhttpd"
+            uhttpd.mkdir(parents=True)
+            (uhttpd / "Makefile").write_text(
+                f"PKG_RELEASE:=1\nPKG_SOURCE_DATE:={build.UHTTPD_SOURCE_DATE}\n"
+                f"PKG_SOURCE_VERSION:={build.UHTTPD_SOURCE_VERSION}\n")
+            (tree / "tmp").mkdir()
+            (tree / "tmp/.packageinfo").write_text("".join(
+                f"Package: {name}\nVersion: 1\nDepends: kernel (={kernel})\n\n"
+                for name in build.KERNEL_MODULES))
             upstream_sums = b"upstream checksum fixture\n"
             (target / "sha256sums").write_bytes(upstream_sums)
             for name in ("sources.lock.buildinfo", "feeds.revisions.buildinfo", "config.seed.buildinfo"):
@@ -265,6 +295,43 @@ class BuildTests(unittest.TestCase):
             self.assertEqual(len(names), len(set(names)), "Artifact names collide on macOS")
             expected = hashlib.sha256(upstream_sums).hexdigest() + "  openwrt-sha256sums\n"
             self.assertIn(expected, (output / "SHA256SUMS").read_text())
+            provenance = json.loads((output / "build-provenance.json").read_text())
+            self.assertEqual(provenance["schema"], "r4s-build-provenance/1")
+            self.assertEqual(provenance["device"], build.DEVICE_SUPPORTED)
+            self.assertEqual(provenance["kernel_package"], kernel)
+            self.assertEqual(provenance["openwrt"]["commit"], build.LOCK["openwrt"]["commit"])
+            self.assertEqual(provenance["image"]["name"],
+                             "openwrt-friendlyarm_nanopi-r4s-squashfs-sysupgrade.img.gz")
+            self.assertIn("build-provenance.json", (output / "SHA256SUMS").read_text())
+
+    def test_collect_rejects_mismatched_kernel_module_dependency(self):
+        with tempfile.TemporaryDirectory() as temp:
+            tree = Path(temp) / "tree"
+            tree.mkdir()
+            self.make_config(tree)
+            target = tree / "bin/targets/rockchip/armv8"
+            target.mkdir(parents=True)
+            (target / "openwrt-friendlyarm_nanopi-r4s-squashfs-sysupgrade.img.gz").touch()
+            kernel = f"6.12.112~test-r{build.LOCK['fullcone']['kernel_release']}"
+            manifest = "\n".join(f"{name} - 1-r1" for name in build.REQUIRED)
+            manifest += "".join(f"\n{name} - 1-r1" for name in build.KERNEL_MODULES
+                                if name not in build.REQUIRED)
+            manifest += f"\nkernel - {kernel}\ndnsmasq-full - 2.93-r2\nuhttpd - 2026-11-05~93b05e0b-r1\n"
+            (target / "openwrt-friendlyarm_nanopi-r4s.manifest").write_text(manifest)
+            (tree / "package/network/services/dnsmasq/patches").mkdir(parents=True)
+            (tree / "package/network/services/dnsmasq/Makefile").write_text(
+                "PKG_UPSTREAM_VERSION:=2.93\nPKG_RELEASE:=2\n")
+            (tree / "package/network/services/uhttpd").mkdir(parents=True)
+            (tree / "package/network/services/uhttpd/Makefile").write_text(
+                f"PKG_RELEASE:=1\nPKG_SOURCE_DATE:={build.UHTTPD_SOURCE_DATE}\n"
+                f"PKG_SOURCE_VERSION:={build.UHTTPD_SOURCE_VERSION}\n")
+            (tree / "tmp").mkdir()
+            (tree / "tmp/.packageinfo").write_text("".join(
+                f"Package: {name}\nVersion: 1\nDepends: kernel (=6.12.112~other-r1002)\n\n"
+                for name in build.KERNEL_MODULES))
+            with patch.object(build, "verify_image"), patch.object(build, "run"):
+                with self.assertRaisesRegex(SystemExit, "not pinned to the built kernel"):
+                    build.collect(tree, Path(temp) / "output")
 
     def test_required_configuration_passes(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -378,6 +445,127 @@ class BuildTests(unittest.TestCase):
 
                 with patch.object(build, "run", side_effect=altered), self.assertRaisesRegex(SystemExit, message):
                     build.verify_image(image)
+
+
+    def boot_tree(self, root, kernel_mib=4, rootfs_mib=8):
+        tree = root / "tree"
+        (tree / "staging_dir/target-test/image").mkdir(parents=True)
+        (tree / "staging_dir/host/bin").mkdir(parents=True)
+        (tree / ".config").write_text(
+            f"CONFIG_TARGET_KERNEL_PARTSIZE={kernel_mib}\n"
+            f"CONFIG_TARGET_ROOTFS_PARTSIZE={rootfs_mib}\n")
+        payload = b"u-boot-rockchip idbloader and itb fixture" * 100
+        (tree / "staging_dir/target-test/image" / build.UBOOT_STAGING_NAME).write_bytes(payload)
+        return tree, payload
+
+    def boot_image(self, root, payload, kernel_mib=4, rootfs_mib=8,
+                   kernel_start=build.PARTITION_ALIGN, stale=b"", fit=True, label=b"kernel"):
+        kernel_count = kernel_mib * 2048
+        rootfs_start = 65536
+        content = bytearray(rootfs_start * 512 + 96)
+        content[510:512] = b"\x55\xaa"
+        for index, (start, count) in enumerate(
+                ((kernel_start, kernel_count), (rootfs_start, rootfs_mib * 2048))):
+            base = 446 + index * 16
+            content[base + 4] = 0x83
+            struct.pack_into("<II", content, base + 8, start, count)
+        loader = build.BOOTLOADER_SECTOR * 512
+        content[loader:loader + len(payload)] = payload
+        content[loader + len(payload):loader + len(payload) + len(stale)] = stale
+        boot = kernel_start * 512
+        superblock = bytearray(1024)
+        struct.pack_into("<H", superblock, 0x38, 0xEF53)
+        struct.pack_into("<I", superblock, 0x18, 0)
+        struct.pack_into("<I", superblock, 4, kernel_count * 512 // 1024)
+        struct.pack_into("<I", superblock, 12, 100)
+        superblock[0x78:0x78 + len(label)] = label
+        content[boot + 1024:boot + 2048] = superblock
+        if fit:
+            content[boot + 2048:boot + 2052] = b"\xd0\x0d\xfe\xed"
+        content[boot + 4096:boot + 4100] = b"\x27\x05\x19\x56"
+        squashfs = bytearray(96)
+        squashfs[:4] = b"hsqs"
+        struct.pack_into("<Q", squashfs, 40, 96)
+        content[rootfs_start * 512:rootfs_start * 512 + 96] = squashfs
+        image = root / "test.img.gz"
+        image.write_bytes(gzip.compress(bytes(content)))
+        return image
+
+    def fwtool_stub(self, tree, devices=("friendlyarm,nanopi-r4s",)):
+        metadata = json.dumps({"metadata_version": "1.1", "supported_devices": list(devices)})
+        tool = tree / "staging_dir/host/bin/fwtool"
+        tool.write_text("#!/bin/sh\ncat > \"$3\" <<'JSON'\n" + metadata + "\nJSON\n")
+        tool.chmod(0o755)
+
+    def test_boot_area_accepts_embedded_bootloader_and_payload(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree, payload = self.boot_tree(root)
+            build.verify_boot_area(self.boot_image(root, payload), tree)
+
+    def test_boot_area_rejects_stale_bootloader_leftovers(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree, payload = self.boot_tree(root)
+            image = self.boot_image(root, payload, stale=b"stale U-Boot from an earlier build")
+            with self.assertRaisesRegex(SystemExit, "Stale bytes"):
+                build.verify_boot_area(image, tree)
+
+    def test_boot_area_rejects_bootloader_overlapping_boot_partition(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree, payload = self.boot_tree(root)
+            image = self.boot_image(root, payload, kernel_start=build.BOOTLOADER_SECTOR + 1)
+            with self.assertRaisesRegex(SystemExit, "overlaps the boot partition"):
+                build.verify_boot_area(image, tree)
+
+    def test_boot_area_rejects_empty_kernel_payload(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree, payload = self.boot_tree(root)
+            image = self.boot_image(root, payload, fit=False)
+            with self.assertRaisesRegex(SystemExit, "kernel or boot script not installed"):
+                build.verify_boot_area(image, tree)
+
+    def test_boot_area_rejects_wrong_label(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree, payload = self.boot_tree(root)
+            image = self.boot_image(root, payload, label=b"other")
+            with self.assertRaisesRegex(SystemExit, "Boot filesystem label"):
+                build.verify_boot_area(image, tree)
+
+    def test_device_metadata_requires_this_board(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree, payload = self.boot_tree(root)
+            image = self.boot_image(root, payload)
+            self.fwtool_stub(tree)
+            build.verify_device_metadata(image, tree)
+            self.fwtool_stub(tree, ("friendlyarm,nanopi-r4s-enterprise",))
+            with self.assertRaisesRegex(SystemExit, "expected friendlyarm,nanopi-r4s"):
+                build.verify_device_metadata(image, tree)
+
+    def test_backports_must_land_in_the_prepared_tree(self):
+        with tempfile.TemporaryDirectory() as temp:
+            tree = Path(temp)
+            patches = tree / "package/network/services/dnsmasq/patches"
+            patches.mkdir(parents=True)
+            for name in build.DNSMASQ_PATCHES:
+                (patches / name).write_text("--- a/src/option.c\n+++ b/src/option.c\n")
+            (tree / "package/network/services/dnsmasq/Makefile").write_text("PKG_RELEASE:=2\n")
+            (tree / "package/network/services/uhttpd").mkdir(parents=True)
+            (tree / "package/network/services/uhttpd/Makefile").write_text(
+                f"PKG_RELEASE:=1\nPKG_SOURCE_DATE:={build.UHTTPD_SOURCE_DATE}\n"
+                f"PKG_SOURCE_VERSION:={build.UHTTPD_SOURCE_VERSION}\n")
+            build.check_package_backports(tree)
+            (patches / build.DNSMASQ_PATCHES[0]).unlink()
+            with self.assertRaisesRegex(SystemExit, "host-load backport patch missing"):
+                build.check_package_backports(tree)
+            (patches / build.DNSMASQ_PATCHES[0]).write_text("--- a\n+++ b\n")
+            (tree / "package/network/services/uhttpd/Makefile").write_text("PKG_RELEASE:=1\n")
+            with self.assertRaisesRegex(SystemExit, "uhttpd request-slot update missing"):
+                build.check_package_backports(tree)
 
 
 if __name__ == "__main__":

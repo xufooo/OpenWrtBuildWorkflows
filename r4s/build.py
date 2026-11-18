@@ -4,6 +4,7 @@
 import hashlib
 import gzip
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -27,6 +28,25 @@ REQUIRED = (
     "luci-app-upnp", "luci-app-wol", "luci-app-ttyd", "luci-app-filemanager",
     "htop", "ethtool", "tcpdump", "iperf3", "curl", "bind-dig",
     "kmod-nf-nat", "kmod-nft-nat", "kmod-nft-offload", "conntrack", "r4s-net-tune", "flock",
+)
+# target/linux/rockchip/image/Makefile derives the bootloader name from the
+# device name and SoC: $(lastword $(subst _, ,friendlyarm_nanopi-r4s))-rk3399.
+DEVICE_SUPPORTED = "friendlyarm,nanopi-r4s"
+UBOOT_STAGING_NAME = "nanopi-r4s-rk3399-u-boot-rockchip.bin"
+BOOTLOADER_SECTOR = 64
+PARTITION_ALIGN = 32768
+BOOT_PAYLOADS = {"fit": b"\xd0\x0d\xfe\xed", "boot-script": b"\x27\x05\x19\x56"}
+# package/network/services/uhttpd: PKG_SOURCE_DATE/PKG_SOURCE_VERSION of the
+# backported 2026-11-05 request-slot update.
+UHTTPD_SOURCE_DATE = "2026-11-05"
+UHTTPD_SOURCE_VERSION = "93b05e0b65d91c23c5aa8fdde378df1f174ec71d"
+DNSMASQ_PATCHES = (
+    "001-fix_severe_SIGHUP_reload_slowdown.patch",
+    "002-tune-store_name-fix-in-47864f3.patch",
+)
+KERNEL_MODULES = (
+    "kmod-ifb", "kmod-nf-nat", "kmod-nft-nat", "kmod-nft-offload",
+    "kmod-r8169", "kmod-sched-cake",
 )
 
 
@@ -115,8 +135,26 @@ def check_native_forwarding(cli, ruleset, passwall, sqm):
         raise SystemExit("Native firewall4 flowtable forwarding is missing")
 
 
+def check_package_backports(tree):
+    """Require the backported dnsmasq fix and uhttpd update in the prepared tree."""
+    dnsmasq = tree / "package/network/services/dnsmasq"
+    for name in DNSMASQ_PATCHES:
+        patch = dnsmasq / "patches" / name
+        if not patch.is_file() or not patch.read_text().startswith("--- "):
+            raise SystemExit(f"dnsmasq host-load backport patch missing: {name}")
+    recipe = (dnsmasq / "Makefile").read_text()
+    if not re.search(r"^PKG_RELEASE:=([2-9]|[1-9]\d+)$", recipe, re.M):
+        raise SystemExit("dnsmasq release bump from the host-load backport is missing")
+    uhttpd = (tree / "package/network/services/uhttpd/Makefile").read_text()
+    for token in (f"PKG_SOURCE_DATE:={UHTTPD_SOURCE_DATE}",
+                  f"PKG_SOURCE_VERSION:={UHTTPD_SOURCE_VERSION}"):
+        if token not in uhttpd:
+            raise SystemExit(f"uhttpd request-slot update missing from prepared tree: {token}")
+
+
 def check_prepared(tree):
     check_fullcone(tree)
+    check_package_backports(tree)
     kernels = list(tree.glob("build_dir/target-*/linux-rockchip_armv8/linux-*/net/netfilter/nf_nat_masquerade.c"))
     firewalls = list(tree.glob("build_dir/target-*/firewall4-*/root/usr/share/ucode/fw4.uc"))
     if len(kernels) != 1 or "void nf_nat_fullcone_helpers_register(void)" not in kernels[0].read_text():
@@ -284,7 +322,134 @@ def check_config(tree):
     print("R4S target, required packages and stock configuration checks passed")
 
 
-def verify_image(image):
+def _partition(table, index):
+    base = 446 + index * 16
+    return table[base + 4], *struct.unpack_from("<II", table, base + 8)
+
+
+def _partition_mib(tree, option):
+    match = re.search(rf"^CONFIG_{option}=(\d+)$", (tree / ".config").read_text(), re.M)
+    if not match:
+        raise SystemExit(f"Target partition size {option} missing from .config")
+    return int(match.group(1))
+
+
+def _staging_image_directory(tree):
+    directories = [path for path in tree.glob("staging_dir/target-*/image") if path.is_dir()]
+    if len(directories) != 1:
+        raise SystemExit(f"Expected one staging image directory, found {len(directories)}")
+    return directories[0]
+
+
+def verify_boot_area(image, tree):
+    """Check the staged bootloader bytes, partition layout and boot payload.
+
+    The boot partition is created by scripts/gen_image_generic.sh, which only
+    builds a FAT filesystem when GUID is set. Rockchip images leave GUID unset,
+    so the expected type is ext4 with the label kernel; FAT is still accepted if
+    the filesystem and its payload are intact, so an upstream switch is not
+    reported as corruption.
+    """
+    kernel_mib = _partition_mib(tree, "TARGET_KERNEL_PARTSIZE")
+    rootfs_mib = _partition_mib(tree, "TARGET_ROOTFS_PARTSIZE")
+    staging = _staging_image_directory(tree)
+    bootloader = staging / UBOOT_STAGING_NAME
+    if not bootloader.is_file():
+        present = sorted(path.name for path in staging.glob("*-u-boot-rockchip.bin"))
+        raise SystemExit(f"Device U-Boot image {UBOOT_STAGING_NAME} missing; staging holds {present}")
+    payload = bootloader.read_bytes()
+    if len(payload) < 512:
+        raise SystemExit("Device U-Boot image is empty")
+    with gzip.open(image, "rb") as stream:
+        table = stream.read(512)
+        if table[510:512] != b"\x55\xaa":
+            raise SystemExit("Firmware MBR signature missing")
+        kernel_type, kernel_start, kernel_count = _partition(table, 0)
+        rootfs_type, rootfs_start, rootfs_count = _partition(table, 1)
+        if (kernel_type, rootfs_type) != (0x83, 0x83):
+            raise SystemExit(f"Unexpected partition types {kernel_type:#x}/{rootfs_type:#x}")
+        if kernel_count != kernel_mib * 2048 or rootfs_count != rootfs_mib * 2048:
+            raise SystemExit("Partition sizes do not match the target configuration")
+        loader_start = BOOTLOADER_SECTOR * 512
+        if kernel_start * 512 < loader_start + len(payload):
+            raise SystemExit("Device U-Boot overlaps the boot partition")
+        if kernel_start % 2048:
+            raise SystemExit("Boot partition is not MiB aligned")
+        if rootfs_start % PARTITION_ALIGN:
+            raise SystemExit("Root partition ignores the U-Boot aligned reserved area")
+        if kernel_start + kernel_count > rootfs_start:
+            raise SystemExit("Boot and root partitions overlap")
+        stream.seek(loader_start)
+        if stream.read(len(payload)) != payload:
+            raise SystemExit("Embedded U-Boot bytes differ from the staged bootloader")
+        offset = loader_start + len(payload)
+        while offset < kernel_start * 512:
+            chunk = stream.read(min(1 << 20, kernel_start * 512 - offset))
+            if not chunk:
+                raise SystemExit("Truncated firmware image")
+            if chunk.strip(b"\0"):
+                raise SystemExit("Stale bytes remain between the bootloader and the boot partition")
+            offset += len(chunk)
+        stream.seek(kernel_start * 512 + 1024)
+        superblock = stream.read(1024)
+        if len(superblock) != 1024:
+            raise SystemExit("Truncated boot partition")
+        if struct.unpack_from("<H", superblock, 0x38)[0] == 0xEF53:
+            block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+            blocks = struct.unpack_from("<I", superblock, 4)[0]
+            free = struct.unpack_from("<I", superblock, 12)[0]
+            if block_size not in (1024, 2048, 4096) or blocks * block_size != kernel_count * 512:
+                raise SystemExit("Boot ext4 filesystem size does not cover its partition")
+            label = superblock[0x78:0x88].split(b"\0")[0]
+        elif superblock[0x36:0x3E] == b"FAT16   " or superblock[0x52:0x5A] == b"FAT32   ":
+            label = superblock[0x2B:0x36].rstrip(b" ") if superblock[0x36:0x3E] == b"FAT16   " \
+                else superblock[0x47:0x52].rstrip(b" ")
+            blocks, free = kernel_count, kernel_count - 1
+        else:
+            raise SystemExit("Boot partition is neither ext4 nor FAT")
+        if label != b"kernel":
+            raise SystemExit(f"Boot filesystem label is {label!r}, expected b'kernel'")
+        if not 0 < blocks - free <= blocks:
+            raise SystemExit("Boot filesystem is empty")
+        stream.seek(kernel_start * 512)
+        found = set()
+        carry = b""
+        remaining = kernel_count * 512
+        while remaining and len(found) < len(BOOT_PAYLOADS):
+            chunk = stream.read(min(1 << 20, remaining))
+            if not chunk:
+                raise SystemExit("Truncated boot partition")
+            window = carry + chunk
+            for name, magic in BOOT_PAYLOADS.items():
+                if name not in found and magic in window:
+                    found.add(name)
+            carry = window[-3:]
+            remaining -= len(chunk)
+    missing = sorted(set(BOOT_PAYLOADS) - found)
+    if missing:
+        raise SystemExit(f"Boot partition lacks {missing}: kernel or boot script not installed")
+
+
+def verify_device_metadata(image, tree):
+    """Require the fwtool metadata to name this device and no other firmware."""
+    tool = tree / "staging_dir/host/bin/fwtool"
+    if not tool.is_file():
+        raise SystemExit("fwtool host tool missing; refusing to guess the image device identity")
+    with tempfile.TemporaryDirectory() as temp:
+        metadata = Path(temp) / "metadata.json"
+        result = subprocess.run([str(tool), "-q", "-i", str(metadata), str(image)],
+                                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode != 0 or not metadata.is_file() or not metadata.stat().st_size:
+            raise SystemExit(f"Firmware metadata missing or unreadable: {result.stderr.strip()}")
+        data = json.loads(metadata.read_text())
+    if data.get("metadata_version") not in ("1.0", "1.1"):
+        raise SystemExit(f"Unsupported firmware metadata version: {data.get('metadata_version')}")
+    supported = data.get("supported_devices") or []
+    if DEVICE_SUPPORTED not in supported:
+        raise SystemExit(f"Firmware targets {supported}, expected {DEVICE_SUPPORTED}")
+
+
+def verify_image(image, tree=None):
     # Rockchip SD images use an MBR; read the actual second partition rootfs.
     with gzip.open(image, "rb") as stream:
         mbr = stream.read(512)
@@ -354,6 +519,107 @@ def verify_image(image):
                      "www/luci-static/resources/view/firewall/zones.js", capture=True)
             if '"fullcone4"' not in ui and "'fullcone4'" not in ui:
                 raise SystemExit("FullCone LuCI support missing from firmware")
+    if tree is not None:
+        verify_boot_area(image, tree)
+        verify_device_metadata(image, tree)
+
+
+def _manifest_versions(manifest):
+    versions = {}
+    for line in manifest.splitlines():
+        fields = line.split()
+        if len(fields) == 3 and fields[1] == "-":
+            versions[fields[0]] = fields[2]
+    return versions
+
+
+def check_service_versions(tree, manifest):
+    """Require the manifest versions to match the prepared service recipes."""
+    versions = _manifest_versions(manifest)
+    dnsmasq = (tree / "package/network/services/dnsmasq/Makefile").read_text()
+    upstream = re.search(r"^PKG_UPSTREAM_VERSION:=(\S+)$", dnsmasq, re.M)
+    release = re.search(r"^PKG_RELEASE:=(\d+)$", dnsmasq, re.M)
+    if not upstream or not release:
+        raise SystemExit("dnsmasq recipe lost its version fields")
+    expected = f"{upstream.group(1)}-r{release.group(1)}"
+    if versions.get("dnsmasq-full") != expected:
+        raise SystemExit(f"dnsmasq-full is {versions.get('dnsmasq-full')}, expected {expected}")
+    uhttpd = (tree / "package/network/services/uhttpd/Makefile").read_text()
+    uhttpd_release = re.search(r"^PKG_RELEASE:=(\d+)$", uhttpd, re.M)
+    if not uhttpd_release:
+        raise SystemExit("uhttpd recipe lost its release field")
+    expected_uhttpd = f"{UHTTPD_SOURCE_DATE}~{UHTTPD_SOURCE_VERSION[:8]}-r{uhttpd_release.group(1)}"
+    if versions.get("uhttpd") != expected_uhttpd:
+        raise SystemExit(f"uhttpd is {versions.get('uhttpd')}, expected {expected_uhttpd}")
+
+
+def check_kernel_modules(tree, manifest):
+    """Require shipped target kernel modules to pin the kernel built here."""
+    versions = _manifest_versions(manifest)
+    kernel = versions.get("kernel")
+    if not kernel:
+        raise SystemExit("Firmware manifest lacks the kernel package")
+    metadata = tree / "tmp/.packageinfo"
+    if not metadata.is_file():
+        raise SystemExit("Build package metadata tmp/.packageinfo is missing")
+    depends, current = {}, None
+    for line in metadata.read_text().splitlines():
+        header = re.match(r"^Package: (\S+)$", line)
+        if header:
+            current = header.group(1)
+        elif current and line.startswith("Depends:"):
+            depends[current] = line.split(":", 1)[1].strip()
+    for name in KERNEL_MODULES:
+        if name not in versions:
+            raise SystemExit(f"Kernel module {name} missing from the image manifest")
+        if f"kernel (={kernel})" not in depends.get(name, ""):
+            raise SystemExit(f"Kernel module {name} is not pinned to the built kernel {kernel}")
+
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_provenance(image, kernel, output):
+    def environment(name):
+        return os.environ.get(name) or "unknown"
+
+    try:
+        commit = subprocess.run(("git", "rev-parse", "HEAD"), cwd=HERE, text=True,
+                                stdout=subprocess.PIPE, check=True).stdout.strip()
+    except (subprocess.CalledProcessError, OSError):
+        commit = "unknown"
+    payload = {
+        "schema": "r4s-build-provenance/1",
+        "source": {
+            "repository": environment("GITHUB_REPOSITORY"),
+            "commit": environment("GITHUB_SHA") if os.environ.get("GITHUB_SHA") else commit,
+            "ref": environment("GITHUB_REF_NAME"),
+        },
+        "workflow": {
+            "name": environment("GITHUB_WORKFLOW"),
+            "run_id": environment("GITHUB_RUN_ID"),
+            "run_attempt": environment("GITHUB_RUN_ATTEMPT"),
+            "run_number": environment("GITHUB_RUN_NUMBER"),
+            "server": environment("GITHUB_SERVER_URL"),
+        },
+        "openwrt": {"commit": LOCK["openwrt"]["commit"]},
+        "device": DEVICE_SUPPORTED,
+        "kernel_package": kernel,
+        "image": {
+            "name": image.name,
+            "bytes": image.stat().st_size,
+            "sha256": _sha256(image),
+        },
+        "inputs": {name: hashlib.sha256((HERE / name).read_bytes()).hexdigest()
+                   for name in ("sources.lock.json", "config.seed")},
+    }
+    (output / "build-provenance.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
 def collect(tree, output):
@@ -362,13 +628,16 @@ def collect(tree, output):
     images = list(target.glob("*friendlyarm_nanopi-r4s-squashfs-sysupgrade.img.gz"))
     if len(images) != 1:
         raise SystemExit(f"Expected one R4S image, found {len(images)}")
-    verify_image(images[0])
+    verify_image(images[0], tree)
     manifests = list(target.glob("*friendlyarm_nanopi-r4s.manifest"))
     if len(manifests) != 1:
         raise SystemExit("R4S image manifest missing")
-    packages = {line.split()[0] for line in manifests[0].read_text().splitlines() if line.strip()}
-    if not re.search(rf"^kernel\s+-\s+\S+-r{LOCK['fullcone']['kernel_release']}$", manifests[0].read_text(), re.M):
+    manifest = manifests[0].read_text()
+    packages = {line.split()[0] for line in manifest.splitlines() if line.strip()}
+    if not re.search(rf"^kernel\s+-\s+\S+-r{LOCK['fullcone']['kernel_release']}$", manifest, re.M):
         raise SystemExit("Firmware manifest lacks the isolated FullCone kernel package release")
+    check_service_versions(tree, manifest)
+    check_kernel_modules(tree, manifest)
     missing = set(REQUIRED) - packages
     if missing:
         raise SystemExit(f"Required packages missing from image manifest: {sorted(missing)}")
@@ -393,6 +662,7 @@ def collect(tree, output):
         shutil.copy2(tree / "public-key.pem", output / "public-key.pem")
     run("tar", "--zstd", "-cf", str(output / "r4s-apk-packages.tar.zst"),
         "-C", str(tree / "bin"), "packages", "targets/rockchip/armv8/packages")
+    write_provenance(images[0], _manifest_versions(manifest)["kernel"], output)
     sums = []
     for file in sorted(output.iterdir()):
         if file.is_file() and file.name != "SHA256SUMS":
