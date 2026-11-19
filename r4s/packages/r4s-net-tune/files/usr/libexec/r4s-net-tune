@@ -155,6 +155,48 @@ tune_features() {
 		done
 	done
 }
+# StarWhiz R4S recipe (public): NIC IRQs on A53, RPS delivery on one A72 each.
+# https://github.com/StarWhiz/NanoPi-R6S-CPU-Optimization-for-Gigabit-SQM
+affinity_irq() {
+	local line
+	line=$(grep -E -m 1 "$1\$" /proc/interrupts 2>/dev/null) || return 1
+	printf '%s\n' "$line" | sed 's/:.*//' | tr -d ' '
+}
+tune_affinity() (
+	local mode dev irq mask rps q changed=0
+	set +f
+	mode=$(uci -q get r4s_net_tune.main.affinity)
+	[ -n "$mode" ] || mode=starwhiz
+	[ "$mode" = starwhiz ] || return 0
+	for dev in eth0 eth1; do
+		[ -e "/sys/class/net/$dev/device" ] || continue
+		if [ "$dev" = eth0 ]; then mask=4; rps=10; else mask=8; rps=20; fi
+		irq=$(affinity_irq "$dev")
+		if [ -n "$irq" ] && [ -w "/proc/irq/$irq/smp_affinity" ]; then
+			printf '%s\n' "$mask" >"/proc/irq/$irq/smp_affinity" || log "irq affinity write failed: $dev"
+			changed=1
+		else
+			log "irq not found for $dev; leaving IRQ affinity untouched"
+		fi
+		for q in "/sys/class/net/$dev"/queues/rx-*; do
+			[ -w "$q/rps_cpus" ] || continue
+			printf '%s\n' "$rps" >"$q/rps_cpus" || log "rps write failed: $q"
+		done
+	done
+	[ "$changed" = 0 ] || : >"$STATE/affinity.applied"
+)
+restore_affinity() {
+	local dev irq mask
+	[ -f "$STATE/affinity.applied" ] || return 0
+	for dev in eth0 eth1; do
+		irq=$(affinity_irq "$dev")
+		[ -n "$irq" ] && [ -w "/proc/irq/$irq/smp_affinity" ] || continue
+		if [ "$dev" = eth0 ]; then mask=10; else mask=20; fi
+		printf '%s\n' "$mask" >"/proc/irq/$irq/smp_affinity" || log "irq restore failed: $dev"
+	done
+	rm -f "$STATE/affinity.applied"
+}
+
 tune_rings() {
 	local dev axis cur max
 	[ "$(uci -q get r4s_net_tune.main.ring)" = 1 ] || return 0
@@ -188,6 +230,7 @@ restore_sys() {
 }
 restore() {
 	local key base last cur dev f opt axis status=0 allow_rings="$1"
+	restore_affinity || status=1
 	for key in $KEYS; do restore_sys "$key" || status=1; done
 	for dev in eth0 eth1; do
 		[ -e "/sys/class/net/$dev/device" ] || continue
@@ -224,7 +267,7 @@ restore() {
 }
 
 defaults() {
-	local mode flows pending package
+	local mode flows pending package affinity
 	[ "$(uci -q get r4s_net_tune.main.defaults_applied)" != 1 ] || return 0
 	enabled || return 0
 	for package in network r4s_net_tune; do
@@ -235,8 +278,16 @@ defaults() {
 		fi
 	done
 	uci -q get 'network.@globals[0]' >/dev/null || uci add network globals >/dev/null || return 1
+	affinity=$(uci -q get r4s_net_tune.main.affinity)
+	case "$affinity" in ''|starwhiz|upstream) affinity=${affinity:-starwhiz} ;; *) return 1 ;; esac
+	uci set "r4s_net_tune.main.affinity=$affinity" || return 1
 	mode=$(uci -q get 'network.@globals[0].packet_steering')
-	case "$mode" in ''|1) uci set 'network.@globals[0].packet_steering=2' || return 1 ;; esac
+	if [ "$affinity" = starwhiz ]; then
+		# The StarWhiz recipe owns rps_cpus; upstream packet steering would overwrite it.
+		case "$mode" in ''|1|2) uci set 'network.@globals[0].packet_steering=0' || return 1 ;; esac
+	else
+		case "$mode" in ''|1) uci set 'network.@globals[0].packet_steering=2' || return 1 ;; esac
+	fi
 	flows=$(uci -q get 'network.@globals[0].steering_flows')
 	case "$flows" in ''|0) uci set 'network.@globals[0].steering_flows=128' || return 1 ;; esac
 	uci commit network || return 1
@@ -256,6 +307,7 @@ apply() {
 	tune_rfs
 	tune_sys
 	tune_features
+	tune_affinity
 }
 activate() {
 	local n

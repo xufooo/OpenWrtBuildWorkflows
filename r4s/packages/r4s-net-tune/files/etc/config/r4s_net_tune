@@ -6,3 +6,6 @@ config tuning 'main'
 	# Kernel defaults are kept; set to 1 to raise rmem/wmem/tcp_* ceilings
 	# and netdev_max_backlog (non-mainstream, opt-in only).
 	option buffers '0'
+	# starwhiz: published R4S recipe (IRQ on A53 0x4/0x8, RPS to one A72 0x10/0x20).
+	# upstream: leave IRQ on A72 0x10/0x20 and use packet steering (all CPUs).
+	option affinity 'starwhiz'

@@ -131,6 +131,12 @@ config_get() {
             (self.root / f"sys/class/net/{dev}/device").mkdir(parents=True)
             self.put(f"sys/class/net/{dev}/flags", "0x1002\n")
             self.put(f"sys/class/net/{dev}/queues/rx-0/rps_flow_cnt", "128\n")
+            self.put(f"sys/class/net/{dev}/queues/rx-0/rps_cpus", "3f\n")
+        self.put("proc/interrupts",
+                 " 42:  0  0  0  0  100  0  GICv3 27 Level  eth0\n"
+                 " 43:  0  0  0  0  0  100  GICv3 28 Level  eth1\n")
+        for irq, mask in ((42, "10"), (43, "20")):
+            self.put("proc/irq/%d/smp_affinity" % irq, mask + "\n")
         self.workers = []
 
     def tearDown(self):
@@ -260,7 +266,7 @@ config_get() {
         self.assertNotIn(["-K", "eth0", "gro", "off"], writes)
 
     def test_defaults_migrate_only_public_values(self):
-        for mode, wanted in ((None, "2"), ("1", "2"), ("0", "0"), ("2", "2")):
+        for mode, wanted in ((None, "0"), ("1", "0"), ("0", "0"), ("2", "0")):
             self.uci.pop("network.@globals[0].packet_steering", None)
             if mode is not None: self.uci["network.@globals[0].packet_steering"] = mode
             self.uci["network.@globals[0].steering_flows"] = "0"; self.save()
@@ -273,19 +279,39 @@ config_get() {
         self.assertEqual(json.loads((self.root / "uci.json").read_text())["network.@globals[0].steering_flows"], "512")
         sets = [x[1][-1].split("=")[0] for x in self.calls("uci") if "set" in x[1]]
         self.assertLessEqual(set(sets), {"network.@globals[0].packet_steering", "network.@globals[0].steering_flows",
-                                        "r4s_net_tune.main.defaults_applied"})
+                                        "r4s_net_tune.main.defaults_applied", "r4s_net_tune.main.affinity"})
 
     def test_defaults_run_once_and_preserve_later_ui_choice(self):
         self.uci["network.@globals[0].packet_steering"] = "1"; self.save()
         self.run_helper("defaults")
         self.uci = json.loads((self.root / "uci.json").read_text())
-        self.assertEqual(self.uci["network.@globals[0].packet_steering"], "2")
+        self.assertEqual(self.uci["network.@globals[0].packet_steering"], "0")
         self.assertEqual(self.uci["r4s_net_tune.main.defaults_applied"], "1")
         self.uci["network.@globals[0].packet_steering"] = "1"; self.save()
         before = len(self.calls("uci"))
         self.run_helper("defaults")
         self.assertEqual(json.loads((self.root / "uci.json").read_text()), self.uci)
         self.assertFalse([x for x in self.calls("uci")[before:] if "set" in x[1] or "commit" in x[1]])
+
+    def test_affinity_recipe_applies_and_restores(self):
+        self.apply()
+        for irq, want in ((42, "4"), (43, "8")):
+            self.assertEqual((self.root / ("proc/irq/%d/smp_affinity" % irq)).read_text().strip(), want)
+        for dev, want in (("eth0", "10"), ("eth1", "20")):
+            self.assertEqual((self.root / f"sys/class/net/{dev}/queues/rx-0/rps_cpus").read_text().strip(), want)
+        self.uci["r4s_net_tune.main.enabled"] = "0"; self.save()
+        self.apply()
+        for irq, want in ((42, "10"), (43, "20")):
+            self.assertEqual((self.root / ("proc/irq/%d/smp_affinity" % irq)).read_text().strip(), want)
+        self.assertFalse(self.state("affinity.applied").exists())
+
+    def test_affinity_upstream_leaves_masks_alone(self):
+        self.uci["r4s_net_tune.main.affinity"] = "upstream"; self.save()
+        self.apply()
+        for irq, want in ((42, "10"), (43, "20")):
+            self.assertEqual((self.root / ("proc/irq/%d/smp_affinity" % irq)).read_text().strip(), want)
+        for dev, want in (("eth0", "3f"), ("eth1", "3f")):
+            self.assertEqual((self.root / f"sys/class/net/{dev}/queues/rx-0/rps_cpus").read_text().strip(), want)
 
     def test_defaults_defer_pending_network_changes(self):
         self.uci["_pending_network"] = "network.globals.user_setting='keep'"
@@ -570,8 +596,11 @@ apply
         self.assertNotIn("define Package/r4s-net-tune/postinst", makefile)
         self.assertIn("define Package/r4s-net-tune/preinst", makefile)
         prod = (FILES / HELPER).read_text()
-        for forbidden in ("network reload", "network restart", "conntrack", "ethtool -C", "smp_affinity"):
+        for forbidden in ("network reload", "network restart", "conntrack", "ethtool -C"):
             self.assertNotIn(forbidden, prod)
+        # IRQ masks are written only by the UCI-gated StarWhiz recipe.
+        self.assertEqual(prod.count('smp_affinity"'), 4)
+        self.assertIn("r4s_net_tune.main.affinity", prod)
         self.assertNotIn("MOCK_ROOT", prod)
 
 

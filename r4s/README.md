@@ -116,7 +116,9 @@ recorded in `network-tuning.buildinfo`.
 
 - Prefer native all-CPU packet steering and 128 flow entries in the initial
   profile. An explicitly disabled steering setting is respected. Subsequent
-  LuCI changes remain authoritative; no fixed IRQ or RPS mask is installed.
+  LuCI changes remain authoritative. With r4s_net_tune.main.affinity=upstream
+  no fixed IRQ or RPS mask is installed; with affinity=starwhiz the published
+  R4S recipe below owns both masks.
   This public-default migration runs once, is recorded in the package's UCI
   config, and defers rather than committing pre-existing pending UCI changes.
   When flow steering is configured, also size its global RFS socket table to
@@ -126,6 +128,15 @@ recorded in `network-tuning.buildinfo`.
 - Reapply the native configured steering after relevant network events,
   using a quiet interval rather than rewriting upstream scripts. SQM changes
   and IFB creation/removal do not independently trigger physical NIC tuning.
+- Default to the published StarWhiz R4S split (NanoPi-R6S-CPU-Optimization
+  for Gigabit SQM, R4S directory): NIC interrupts stay on the A53 cluster
+  (eth0 mask 4, eth1 mask 8) and each interface's RPS delivery targets one
+  A72 (eth0 0x10, eth1 0x20), so the NAPI poll and the network stack run on
+  different cores. packet_steering is set to 0 because it rewrites rps_cpus
+  on every network/firewall event and would undo the masks. Set
+  r4s_net_tune.main.affinity=upstream to restore the OpenWrt 25.12 layout
+  (IRQ 0x10/0x20 plus packet steering); the previous masks are restored when
+  the service stops.
 - Keep the kernel socket-buffer ceilings and netdev_max_backlog at their
   upstream defaults, matching OpenWrt and YAOF. The older 64 MB ceilings and
   16384 backlog are opt-in via r4s_net_tune.main.buffers; they are not memory
