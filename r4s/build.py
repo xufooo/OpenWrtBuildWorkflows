@@ -210,6 +210,10 @@ def check_net_tune(tree):
 def prepare_integrations(tree):
     destinations = {
         "pcie-reset.patch": "target/linux/rockchip/patches-6.12/402-1-r4s-pcie-reset.patch",
+        # Applied after upstream 650: session-data filter, 16-bit length clamp
+        # and no software GSO recursion (ported from upstream v7.2).
+        "pppoe-gro-gso-fixes.patch":
+            "target/linux/generic/pending-6.12/651-net-pppoe-gro-gso-fixes.patch",
     }
     for name, relative in destinations.items():
         destination = tree / relative
@@ -316,6 +320,8 @@ def check_config(tree):
     check_net_tune(tree)
     for name, relative in (
         ("pcie-reset.patch", "target/linux/rockchip/patches-6.12/402-1-r4s-pcie-reset.patch"),
+        ("pppoe-gro-gso-fixes.patch",
+         "target/linux/generic/pending-6.12/651-net-pppoe-gro-gso-fixes.patch"),
     ):
         if (tree / relative).read_bytes() != (HERE / "patches" / name).read_bytes():
             raise SystemExit(f"Integration patch missing or changed: {name}")

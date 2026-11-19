@@ -1,0 +1,32 @@
+diff --git a/drivers/net/ppp/pppoe.c b/drivers/net/ppp/pppoe.c
+index bade4cd..742f05e 100644
+--- a/drivers/net/ppp/pppoe.c
++++ b/drivers/net/ppp/pppoe.c
+@@ -1218,6 +1218,10 @@ static struct sk_buff *pppoe_gro_receive(struct list_head *head,
+ 	if (unlikely(!phdr))
+ 		goto out;
+ 
++	/* only aggregate PPPoE session data (version 1, type 1, code 0) */
++	if (*(const __be16 *)phdr != cpu_to_be16(0x1100))
++		goto out;
++
+ 	/* ignore packets with padding or invalid length */
+ 	if (skb_gro_len(skb) != be16_to_cpu(phdr->length) + hlen)
+ 		goto out;
+@@ -1273,7 +1277,7 @@ static int pppoe_gro_complete(struct sk_buff *skb, int nhoff)
+ 	if (err)
+ 		return err;
+ 
+-	len = skb->len - (nhoff + sizeof(*phdr));
++	len = min(skb->len - (nhoff + sizeof(*phdr)), 0xFFFFU);
+ 	phdr->length = cpu_to_be16(len);
+ 
+ 	return 0;
+@@ -1305,6 +1309,7 @@ static struct sk_buff *pppoe_gso_segment(struct sk_buff *skb,
+ 
+ 	orig_type = skb->protocol;
+ 	__skb_pull(skb, pppoe_hlen);
++	features &= ~NETIF_F_GSO_SOFTWARE;
+ 	segs = ptype->callbacks.gso_segment(skb, features);
+ 	if (IS_ERR_OR_NULL(segs)) {
+ 		skb_gso_error_unwind(skb, orig_type, pppoe_hlen, mac_offset,
