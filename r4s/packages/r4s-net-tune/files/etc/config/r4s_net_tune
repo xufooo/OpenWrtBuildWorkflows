@@ -3,3 +3,6 @@ config tuning 'main'
 	option enabled '1'
 	option ring '1'
 	option defaults_applied '0'
+	# Kernel defaults are kept; set to 1 to raise rmem/wmem/tcp_* ceilings
+	# and netdev_max_backlog (non-mainstream, opt-in only).
+	option buffers '0'

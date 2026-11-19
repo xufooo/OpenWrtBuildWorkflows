@@ -126,8 +126,9 @@ recorded in `network-tuning.buildinfo`.
 - Reapply the native configured steering after relevant network events,
   using a quiet interval rather than rewriting upstream scripts. SQM changes
   and IFB creation/removal do not independently trigger physical NIC tuning.
-- Raise socket-buffer ceilings without lowering existing TCP minimum/default
-  values, and raise the network backlog limit. Larger ceilings are not memory
+- Keep the kernel socket-buffer ceilings and netdev_max_backlog at their
+  upstream defaults, matching OpenWrt and YAOF. The older 64 MB ceilings and
+  16384 backlog are opt-in via r4s_net_tune.main.buffers; they are not memory
   reservations and are not evidence of improved throughput.
 - Apply supported RX-checksum/GRO settings, respecting explicit device GRO
   configuration. Unsupported/fixed features are not forced.

@@ -120,6 +120,7 @@ config_get() {
         for k, v in self.initial.items(): self.put("proc/sys/" + k.replace(".", "/"), v + "\n")
         self.uci = {"r4s_net_tune.main.enabled": "1", "r4s_net_tune.main.ring": "1",
                     "r4s_net_tune.main.defaults_applied": "0",
+                    "r4s_net_tune.main.buffers": "1",
                     "network.@globals[0]": "globals", "network.@globals[0].packet_steering": "2",
                     "network.@globals[0].steering_flows": "128"}
         self.eth = {dev: {"features": {"rx-checksumming": "off", "generic-receive-offload": "off"},
@@ -199,6 +200,14 @@ config_get() {
         self.assertEqual(self.read_sys("net.core.rmem_max"), "33554432")
         self.assertEqual(self.read_sys("net.core.wmem_max"), "134217728")
         self.assertFalse(self.state("net.core.wmem_max.last").exists())
+
+    def test_buffer_ceilings_are_opt_in(self):
+        del self.uci["r4s_net_tune.main.buffers"]; self.save()
+        self.apply()
+        self.assertEqual(self.read_sys("net.core.rmem_max"), "212992")
+        self.assertEqual(self.read_sys("net.ipv4.tcp_rmem"), "4096 87380 6291456")
+        self.assertEqual(self.read_sys("net.core.netdev_max_backlog"), "1000")
+        self.assertFalse(self.state("net.core.rmem_max.base").exists())
 
     def test_enabled_zero_restores_and_never_reloads_network(self):
         self.apply()
