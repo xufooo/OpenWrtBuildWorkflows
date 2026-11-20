@@ -3,7 +3,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=r4s-net-tune
 PKG_VERSION:=1
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 PKG_LICENSE:=GPL-2.0-only
 
 include $(INCLUDE_DIR)/package.mk
@@ -44,11 +44,13 @@ endef
 define Package/r4s-net-tune/install
 	$(INSTALL_DIR) $(1)/etc/config $(1)/etc/init.d $(1)/usr/libexec
 	$(INSTALL_DIR) $(1)/etc/hotplug.d/net $(1)/etc/uci-defaults
+	$(INSTALL_DIR) $(1)/etc/sysctl.d
 	$(INSTALL_CONF) ./files/etc/config/r4s_net_tune $(1)/etc/config/r4s_net_tune
 	$(INSTALL_BIN) ./files/etc/init.d/r4s-net-tune $(1)/etc/init.d/r4s-net-tune
 	$(INSTALL_BIN) ./files/usr/libexec/r4s-net-tune $(1)/usr/libexec/r4s-net-tune
 	$(INSTALL_BIN) ./files/etc/hotplug.d/net/90-r4s-net-tune $(1)/etc/hotplug.d/net/90-r4s-net-tune
 	$(INSTALL_BIN) ./files/etc/uci-defaults/90-r4s-net-tune $(1)/etc/uci-defaults/90-r4s-net-tune
+	$(INSTALL_DATA) ./files/etc/sysctl.d/12-nlbwmon.conf $(1)/etc/sysctl.d/12-nlbwmon.conf
 endef
 
 $(eval $(call BuildPackage,r4s-net-tune))
