@@ -1,0 +1,3 @@
+Single-queue CAKE with explicit ingress mode on the download side.
+Upload behavior, bandwidth limits and link-layer settings are unchanged.
+Select cake as the queueing discipline.

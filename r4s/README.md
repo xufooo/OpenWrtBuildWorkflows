@@ -103,9 +103,9 @@ not perform router experiments or import private device test records.
 ## R4S network tuning candidate
 
 This candidate keeps OpenWrt 25.12.6, the same kernel, drivers and official SQM
-package. It does not change CAKE parameters, select a new QoS engine, enable
-SQM or flow offloading, or embed bandwidth limits. It is not a verified fix for
-WAN throughput loss. No router operations or speed tests run from this workflow.
+package. It ships a separate opt-in SQM profile, without enabling SQM or flow
+offloading or embedding site-specific bandwidth limits. It is not a verified
+fix for WAN throughput loss. No router operations or speed tests run from CI.
 
 The separate `r4s-net-tune` package is restricted to R4S board identities;
 feature/ring changes target physical ports eth0/eth1 only. Packet steering
@@ -128,23 +128,22 @@ recorded in `network-tuning.buildinfo`.
 - Reapply the native configured steering after relevant network events,
   using a quiet interval rather than rewriting upstream scripts. SQM changes
   and IFB creation/removal do not independently trigger physical NIC tuning.
-- Default to the published StarWhiz R4S split (NanoPi-R6S-CPU-Optimization
+- Keep the published StarWhiz R4S split opt-in (NanoPi-R6S-CPU-Optimization
   for Gigabit SQM, R4S directory): NIC interrupts stay on the A53 cluster
   (eth0 mask 4, eth1 mask 8) and each interface's RPS delivery targets one
   A72 (eth0 0x10, eth1 0x20), so the NAPI poll and the network stack run on
-  different cores. packet_steering is set to 0 because it rewrites rps_cpus
-  on every network/firewall event and would undo the masks. Set
-  r4s_net_tune.main.affinity=upstream to restore the OpenWrt 25.12 layout
-  (IRQ 0x10/0x20 plus packet steering); the previous masks are restored when
-  the service stops.
+  different cores. That optional recipe needs packet_steering=0 to avoid a
+  second writer for rps_cpus. The clean-image default is upstream; no existing
+  saved affinity selection is migrated.
 - Keep the kernel socket-buffer ceilings and netdev_max_backlog at their
   upstream defaults, matching OpenWrt and YAOF. The older 64 MB ceilings and
   16384 backlog are opt-in via r4s_net_tune.main.buffers; they are not memory
   reservations and are not evidence of improved throughput.
 - Apply supported RX-checksum/GRO settings, respecting explicit device GRO
   configuration. Unsupported/fixed features are not forced.
-- Ring resizing is limited to early boot while the physical interface is down.
-  No live ring resize, adaptive-coalescing change or network restart is used.
+- Keep RX/TX rings at driver defaults on clean installations. The old
+  ring=1 path remains opt-in, limited to early boot while the device is down.
+  A larger ring alone is not proof of improved throughput or loaded latency.
 
 The service records only a small allowlist of original numeric/feature values
 under its root-only runtime directory and restores its runtime changes on stop.
@@ -153,6 +152,26 @@ change may require a reboot to return to the driver's defaults. Native UCI
 steering settings remain visible and are not secretly reverted by the service.
 Live package installation/upgrade does not automatically start the tuning
 service; start it explicitly or reboot after reviewing the profile.
+
+### Optional SQM download profile
+
+In LuCI under Network > SQM QoS > Queue Discipline, select `cake` and
+`r4s_cake_ingress.qos` to use the upstream `piece_of_cake.qos` setup with
+explicit CAKE ingress accounting on the IFB. This is separate from attaching
+the ingress hook; it accounts for packets dropped after they already used the
+downlink. The profile uses single-queue CAKE, leaves the upload options alone
+and does not pick rates, devices or overhead. Keep the stock profile to compare
+or switch back. Either profile leaves the queue disabled until explicitly enabled.
+
+Use the Link Layer Adaptation tab for overhead appropriate to the interface
+and encapsulation. The stock `simplest_tbf.qos` with `fq_codel` remains a
+lower-cost comparison, not an equivalent replacement for CAKE host isolation.
+Do not infer coexistence from the software flow-offload switch: for a known
+direct forwarded test flow, compare its conntrack offload state with matching
+WAN/IFB CAKE byte counters and loaded latency.
+
+CI checks the exact prepared upstream profile with mock tc/ip and checks the
+final installed profile, help text and disabled SQM default in the SquashFS.
 
 Excluded from this profile: CPU overclock/governor changes, mitigation changes,
 proxy ARP, DNS, IPv6, ZRAM, author-specific proxy rules and unproven CAKE/IFB

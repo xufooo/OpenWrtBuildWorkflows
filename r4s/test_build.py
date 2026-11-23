@@ -34,6 +34,9 @@ class BuildTests(unittest.TestCase):
             "usr/share/firewall4/templates/ruleset.uc": "flowtable ft {}\nflow offload @ft;",
             "usr/share/passwall/nftables.sh": "stock PassWall",
             "etc/init.d/sqm": "stock SQM",
+            "etc/config/sqm": "config queue 'wan'\n option enabled '0'\n option script 'piece_of_cake.qos'\n",
+            "usr/lib/sqm/piece_of_cake.qos": "stock CAKE",
+            "usr/lib/sqm/simplest_tbf.qos": "stock TBF",
             "etc/init.d/miniupnpd": "upnpd_write_bool ext_allow_private_ipv4 0",
             "usr/share/ucode/fw4.uc": "function nft_try_brcmfullcone() {}",
             "www/luci-static/resources/view/firewall/zones.js": "var option = 'fullcone4';",
@@ -63,6 +66,15 @@ class BuildTests(unittest.TestCase):
             image, reader = self.image_fixture(Path(temp))
             with patch.object(build, "run", side_effect=reader):
                 build.verify_image(image)
+
+    def test_sqm_profile_is_opt_in(self):
+        disabled = "config queue 'wan'\n option enabled '0'\n option script 'piece_of_cake.qos'\n"
+        build.check_sqm_defaults(disabled)
+        for wrong in ("", disabled.replace("'0'", "'1'"),
+                      disabled.replace("piece_of_cake.qos", "r4s_cake_ingress.qos"),
+                      disabled + "config queue 'other'\n option script 'piece_of_cake.qos'\n"):
+            with self.subTest(config=wrong), self.assertRaisesRegex(SystemExit, "Initial SQM"):
+                build.check_sqm_defaults(wrong)
 
     def test_image_rejects_retired_files_and_hooks(self):
         for retired, hook in (("usr/libexec/r4s-accel", None),

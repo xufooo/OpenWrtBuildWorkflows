@@ -16,15 +16,21 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 LOCK = json.loads((HERE / "sources.lock.json").read_text())
 NET_TUNE = HERE / "packages/r4s-net-tune"
-NET_TUNE_FILES = (
-    "etc/config/r4s_net_tune", "etc/init.d/r4s-net-tune",
+NET_TUNE_SCRIPTS = (
+    "etc/init.d/r4s-net-tune",
     "usr/libexec/r4s-net-tune", "etc/hotplug.d/net/90-r4s-net-tune",
     "etc/uci-defaults/90-r4s-net-tune",
+    "usr/lib/sqm/r4s_cake_ingress.qos",
 )
+NET_TUNE_DATA = (
+    "etc/config/r4s_net_tune", "etc/sysctl.d/12-nlbwmon.conf",
+    "usr/lib/sqm/r4s_cake_ingress.qos.help",
+)
+NET_TUNE_FILES = NET_TUNE_SCRIPTS + NET_TUNE_DATA
 REQUIRED = (
     "luci", "luci-ssl", "luci-theme-argon", "dnsmasq-full", "firewall4",
     "luci-app-passwall", "sing-box", "xray-core", "luci-app-mosdns", "mosdns",
-    "luci-app-lucky", "lucky", "luci-app-sqm", "luci-app-nlbwmon",
+    "luci-app-lucky", "lucky", "luci-app-sqm", "sqm-scripts", "kmod-sched-core", "luci-app-nlbwmon",
     "luci-app-upnp", "luci-app-wol", "luci-app-ttyd", "luci-app-filemanager",
     "htop", "ethtool", "tcpdump", "iperf3", "curl", "bind-dig",
     "kmod-nf-nat", "kmod-nft-nat", "kmod-nft-offload", "conntrack", "r4s-net-tune", "flock",
@@ -135,6 +141,14 @@ def check_native_forwarding(cli, ruleset, passwall, sqm):
             raise SystemExit(f"Retired selective acceleration hook remains in {name}")
     if "flow offload @ft" not in ruleset or "flowtable ft" not in ruleset:
         raise SystemExit("Native firewall4 flowtable forwarding is missing")
+
+
+def check_sqm_defaults(config):
+    queues = re.split(r"^\s*config\s+queue\b", config, flags=re.M)[1:]
+    for option, expected in (("enabled", "0"), ("script", "piece_of_cake.qos")):
+        pattern = rf"""^\s*option\s+{option}\s+['"]?([^'"\s#]+)['"]?[ \t]*(?:#.*)?$"""
+        if not queues or any(re.findall(pattern, queue, re.M) != [expected] for queue in queues):
+            raise SystemExit(f"Initial SQM queues must keep stock disabled configuration: {option}")
 
 
 def check_package_backports(tree):
@@ -512,8 +526,12 @@ def verify_image(image, tree=None):
                 actual = run("unsquashfs", "-cat", str(squashfs), name, capture=True)
                 if actual != (NET_TUNE / "files" / name).read_text():
                     raise SystemExit(f"R4S network tuning file changed in firmware: {name}")
-                if name != "etc/config/r4s_net_tune" and entries[f"squashfs-root/{name}"][0][3:4] != "x":
+                if name in NET_TUNE_SCRIPTS and entries[f"squashfs-root/{name}"][0][3:4] != "x":
                     raise SystemExit(f"R4S network tuning script is not executable: {name}")
+            for name in ("piece_of_cake.qos", "simplest_tbf.qos"):
+                if f"squashfs-root/usr/lib/sqm/{name}" not in paths:
+                    raise SystemExit(f"Stock SQM profile missing from firmware: {name}")
+            check_sqm_defaults(run("unsquashfs", "-cat", str(squashfs), "etc/config/sqm", capture=True))
             if "squashfs-root/etc/rc.d/S19r4s-net-tune" not in paths:
                 raise SystemExit("R4S network tuning boot service is not enabled in firmware")
             boot = entries["squashfs-root/etc/rc.d/S19r4s-net-tune"]

@@ -166,7 +166,6 @@ tune_affinity() (
 	local mode dev irq mask rps q changed=0
 	set +f
 	mode=$(uci -q get r4s_net_tune.main.affinity)
-	[ -n "$mode" ] || mode=starwhiz
 	[ "$mode" = starwhiz ] || return 0
 	for dev in eth0 eth1; do
 		[ -e "/sys/class/net/$dev/device" ] || continue
@@ -279,7 +278,7 @@ defaults() {
 	done
 	uci -q get 'network.@globals[0]' >/dev/null || uci add network globals >/dev/null || return 1
 	affinity=$(uci -q get r4s_net_tune.main.affinity)
-	case "$affinity" in ''|starwhiz|upstream) affinity=${affinity:-starwhiz} ;; *) return 1 ;; esac
+	case "$affinity" in ''|starwhiz|upstream) affinity=${affinity:-upstream} ;; *) return 1 ;; esac
 	uci set "r4s_net_tune.main.affinity=$affinity" || return 1
 	mode=$(uci -q get 'network.@globals[0].packet_steering')
 	if [ "$affinity" = starwhiz ]; then

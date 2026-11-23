@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# shellcheck shell=sh
+
+# Use upstream IFB setup, shaping, cleanup and link-layer settings.
+# shellcheck disable=SC1091
+. "${SQM_LIB_DIR}/piece_of_cake.qos" || return 1
+INGRESS_CAKE_OPTS="${INGRESS_CAKE_OPTS} ingress"
+# Consumed by upstream start-sqm after sourcing this profile.
+# shellcheck disable=SC2034
+SUPPORT_MQ=0

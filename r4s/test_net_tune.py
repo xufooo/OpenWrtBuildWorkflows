@@ -266,7 +266,7 @@ config_get() {
         self.assertNotIn(["-K", "eth0", "gro", "off"], writes)
 
     def test_defaults_migrate_only_public_values(self):
-        for mode, wanted in ((None, "0"), ("1", "0"), ("0", "0"), ("2", "0")):
+        for mode, wanted in ((None, "2"), ("1", "2"), ("0", "0"), ("2", "2")):
             self.uci.pop("network.@globals[0].packet_steering", None)
             if mode is not None: self.uci["network.@globals[0].packet_steering"] = mode
             self.uci["network.@globals[0].steering_flows"] = "0"; self.save()
@@ -274,6 +274,7 @@ config_get() {
             d = json.loads((self.root / "uci.json").read_text())
             self.assertEqual(d["network.@globals[0].packet_steering"], wanted)
             self.assertEqual(d["network.@globals[0].steering_flows"], "128")
+            self.assertEqual(d["r4s_net_tune.main.affinity"], "upstream")
         self.uci["network.@globals[0].steering_flows"] = "512"; self.save()
         self.run_helper("defaults")
         self.assertEqual(json.loads((self.root / "uci.json").read_text())["network.@globals[0].steering_flows"], "512")
@@ -285,7 +286,7 @@ config_get() {
         self.uci["network.@globals[0].packet_steering"] = "1"; self.save()
         self.run_helper("defaults")
         self.uci = json.loads((self.root / "uci.json").read_text())
-        self.assertEqual(self.uci["network.@globals[0].packet_steering"], "0")
+        self.assertEqual(self.uci["network.@globals[0].packet_steering"], "2")
         self.assertEqual(self.uci["r4s_net_tune.main.defaults_applied"], "1")
         self.uci["network.@globals[0].packet_steering"] = "1"; self.save()
         before = len(self.calls("uci"))
@@ -294,6 +295,7 @@ config_get() {
         self.assertFalse([x for x in self.calls("uci")[before:] if "set" in x[1] or "commit" in x[1]])
 
     def test_affinity_recipe_applies_and_restores(self):
+        self.uci["r4s_net_tune.main.affinity"] = "starwhiz"; self.save()
         self.apply()
         for irq, want in ((42, "4"), (43, "8")):
             self.assertEqual((self.root / ("proc/irq/%d/smp_affinity" % irq)).read_text().strip(), want)
@@ -306,7 +308,7 @@ config_get() {
         self.assertFalse(self.state("affinity.applied").exists())
 
     def test_affinity_upstream_leaves_masks_alone(self):
-        self.uci["r4s_net_tune.main.affinity"] = "upstream"; self.save()
+        # A missing legacy option must not activate the manual IRQ profile.
         self.apply()
         for irq, want in ((42, "10"), (43, "20")):
             self.assertEqual((self.root / ("proc/irq/%d/smp_affinity" % irq)).read_text().strip(), want)

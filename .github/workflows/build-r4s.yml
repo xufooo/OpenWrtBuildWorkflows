@@ -41,7 +41,8 @@ jobs:
           shellcheck -s sh -S warning r4s/packages/r4s-net-tune/files/usr/libexec/r4s-net-tune \
             r4s/packages/r4s-net-tune/files/etc/init.d/r4s-net-tune \
             r4s/packages/r4s-net-tune/files/etc/hotplug.d/net/90-r4s-net-tune \
-            r4s/packages/r4s-net-tune/files/etc/uci-defaults/90-r4s-net-tune
+            r4s/packages/r4s-net-tune/files/etc/uci-defaults/90-r4s-net-tune \
+            r4s/packages/r4s-net-tune/files/usr/lib/sqm/r4s_cake_ingress.qos
       - name: Prepare pinned sources and initial configuration
         run: python3 r4s/build.py prepare "$RUNNER_TEMP/openwrt"
       - name: Configure and verify package selection
@@ -62,6 +63,7 @@ jobs:
           make package/firewall4/prepare V=s
           make package/feeds/packages/sqm-scripts/prepare V=s
           python3 "$GITHUB_WORKSPACE/r4s/build.py" check-prepared "$PWD"
+          sh "$GITHUB_WORKSPACE/r4s/test_sqm_profile.sh" build_dir/target-*/sqm-scripts-*/src
       - name: Compile firmware
         working-directory: ${{ runner.temp }}/openwrt
         run: |
