@@ -35,6 +35,8 @@ class BuildTests(unittest.TestCase):
             "usr/share/passwall/nftables.sh": "stock PassWall",
             "etc/init.d/sqm": "stock SQM",
             "etc/config/sqm": "config queue 'wan'\n option enabled '0'\n option script 'piece_of_cake.qos'\n",
+            "etc/sysctl.d/12-tcp-bbr.conf": "net.ipv4.tcp_congestion_control=bbr\n",
+            "lib/modules/6.12.112/tcp_bbr.ko": "module fixture",
             "usr/lib/sqm/piece_of_cake.qos": "stock CAKE",
             "usr/lib/sqm/simplest_tbf.qos": "stock TBF",
             "etc/init.d/miniupnpd": "upnpd_write_bool ext_allow_private_ipv4 0",

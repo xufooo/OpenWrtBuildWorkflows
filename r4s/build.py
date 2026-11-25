@@ -33,7 +33,7 @@ REQUIRED = (
     "luci-app-lucky", "lucky", "luci-app-sqm", "sqm-scripts", "kmod-sched-core", "luci-app-nlbwmon",
     "luci-app-upnp", "luci-app-wol", "luci-app-ttyd", "luci-app-filemanager",
     "htop", "ethtool", "tcpdump", "iperf3", "curl", "bind-dig",
-    "kmod-nf-nat", "kmod-nft-nat", "kmod-nft-offload", "conntrack", "r4s-net-tune", "flock",
+    "kmod-nf-nat", "kmod-nft-nat", "kmod-nft-offload", "kmod-tcp-bbr", "conntrack", "r4s-net-tune", "flock",
 )
 # target/linux/rockchip/image/Makefile derives the bootloader name from the
 # device name and SoC: $(lastword $(subst _, ,friendlyarm_nanopi-r4s))-rk3399.
@@ -54,7 +54,7 @@ DNSMASQ_PATCHES = (
 )
 KERNEL_MODULES = (
     "kmod-ifb", "kmod-nf-nat", "kmod-nft-nat", "kmod-nft-offload",
-    "kmod-r8169", "kmod-sched-cake",
+    "kmod-r8169", "kmod-sched-cake", "kmod-tcp-bbr",
 )
 
 
@@ -532,6 +532,12 @@ def verify_image(image, tree=None):
                 if f"squashfs-root/usr/lib/sqm/{name}" not in paths:
                     raise SystemExit(f"Stock SQM profile missing from firmware: {name}")
             check_sqm_defaults(run("unsquashfs", "-cat", str(squashfs), "etc/config/sqm", capture=True))
+            bbr = run("unsquashfs", "-cat", str(squashfs), "etc/sysctl.d/12-tcp-bbr.conf", capture=True)
+            if not re.search(r"^\s*net\.ipv4\.tcp_congestion_control\s*=\s*bbr\s*$", bbr, re.M):
+                raise SystemExit("BBR is not the firmware's default TCP congestion control")
+            if not any(re.fullmatch(r"squashfs-root/lib/modules/[^/]+/tcp_bbr\.ko(?:\.(?:gz|xz|zst))?", path)
+                       for path in paths):
+                raise SystemExit("BBR kernel module missing from firmware")
             if "squashfs-root/etc/rc.d/S19r4s-net-tune" not in paths:
                 raise SystemExit("R4S network tuning boot service is not enabled in firmware")
             boot = entries["squashfs-root/etc/rc.d/S19r4s-net-tune"]

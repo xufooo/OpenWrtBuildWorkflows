@@ -42,6 +42,7 @@ CONFIG_SING_BOX_BUILD_UTLS=y
 CONFIG_PACKAGE_luci-app-mosdns=y
 CONFIG_PACKAGE_luci-app-lucky=y
 CONFIG_PACKAGE_luci-app-sqm=y
+CONFIG_PACKAGE_kmod-tcp-bbr=y
 CONFIG_PACKAGE_r4s-net-tune=y
 CONFIG_PACKAGE_luci-app-nlbwmon=y
 CONFIG_PACKAGE_luci-app-upnp=y
