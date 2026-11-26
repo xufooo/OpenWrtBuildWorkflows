@@ -303,13 +303,17 @@ def prepare(tree):
 
 def apply_package_backports(tree):
     for commit in LOCK["openwrt_package_backports"]:
-        run("git", "fetch", "--depth=2", "origin", commit, cwd=tree)
-        diff = run("git", "diff", "--binary", f"{commit}^", commit,
-                   cwd=tree, capture=True)
+        # Each depth-limited fetch gets its own shallow boundary.
+        with tempfile.TemporaryDirectory(prefix="openwrt-backport-") as scratch:
+            run("git", "init", "-q", cwd=scratch)
+            run("git", "fetch", "--no-tags", "--depth=2", LOCK["openwrt"]["url"],
+                commit, cwd=scratch)
+            diff = subprocess.check_output(
+                ["git", "diff", "--binary", f"{commit}^", commit], cwd=scratch)
         if not diff:
             raise SystemExit(f"Empty OpenWrt package backport: {commit}")
         subprocess.run(["git", "apply", "--index"], cwd=tree,
-                       input=diff, text=True, check=True)
+                       input=diff, check=True)
 
 
 def check_config(tree):
